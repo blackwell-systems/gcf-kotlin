@@ -101,7 +101,14 @@ private fun encodeArray(arr: List<*>, name: String, depth: Int): List<String> {
         return encodeTabular(arr, name, depth)
     }
 
-    // Non-uniform array.
+    // Primitive array: inline as comma-separated values.
+    val allPrimitive = arr.all { !isObject(it) && !isArray(it) }
+    if (allPrimitive) {
+        val vals = arr.joinToString(",") { formatValue(it) }
+        return listOf("$prefix$name[${arr.size}]: $vals")
+    }
+
+    // Non-uniform with objects: per-item encoding.
     val lines = mutableListOf<String>()
     if (name.isNotEmpty()) {
         lines.add("$prefix## $name [${arr.size}]")
