@@ -33,7 +33,12 @@ fun decode(input: String): Payload {
 
         // Group header.
         if (trimmed.startsWith("## ")) {
-            val group = trimmed.substring(3)
+            var group = trimmed.substring(3)
+            // Strip bracket suffix: "edges [200]" -> "edges"
+            val bracketIdx = group.indexOf(" [")
+            if (bracketIdx >= 0) {
+                group = group.substring(0, bracketIdx)
+            }
             inEdges = group == "edges"
             if (!inEdges) {
                 currentDistance = when (group) {

@@ -6,18 +6,21 @@ package com.blackwellsystems.gcf
 fun encode(payload: Payload): String {
     val b = StringBuilder()
 
-    // Header line.
-    b.append("GCF tool=${payload.tool} budget=${payload.tokenBudget} tokens=${payload.tokensUsed} symbols=${payload.symbols.size}")
-    if (payload.packRoot.isNotEmpty()) {
-        b.append(" pack_root=${payload.packRoot}")
-    }
-    b.append('\n')
-
     // Build symbol index for edge references.
     val symIndex = mutableMapOf<String, Int>()
     payload.symbols.forEachIndexed { i, s ->
         symIndex[s.qualifiedName] = i
     }
+
+    // Count valid edges (both endpoints in symbol index).
+    val validEdges = payload.edges.count { symIndex.containsKey(it.source) && symIndex.containsKey(it.target) }
+
+    // Header line.
+    b.append("GCF tool=${payload.tool} budget=${payload.tokenBudget} tokens=${payload.tokensUsed} symbols=${payload.symbols.size} edges=$validEdges")
+    if (payload.packRoot.isNotEmpty()) {
+        b.append(" pack_root=${payload.packRoot}")
+    }
+    b.append('\n')
 
     // Group symbols by distance.
     val groups = groupByDistance(payload.symbols)
@@ -42,7 +45,7 @@ fun encode(payload: Payload): String {
 
     // Edges section.
     if (payload.edges.isNotEmpty()) {
-        b.append("## edges\n")
+        b.append("## edges [$validEdges]\n")
         for (e in payload.edges) {
             val srcIdx = symIndex[e.source] ?: continue
             val tgtIdx = symIndex[e.target] ?: continue

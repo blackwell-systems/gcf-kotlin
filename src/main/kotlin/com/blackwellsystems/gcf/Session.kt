@@ -65,18 +65,21 @@ fun encodeWithSession(payload: Payload, session: Session?): String {
 
     val b = StringBuilder()
 
-    // Header with session=true marker.
-    b.append("GCF tool=${payload.tool} budget=${payload.tokenBudget} tokens=${payload.tokensUsed} symbols=${payload.symbols.size} session=true")
-    if (payload.packRoot.isNotEmpty()) {
-        b.append(" pack_root=${payload.packRoot}")
-    }
-    b.append('\n')
-
     // Build local ID mapping for this response.
     val localIndex = mutableMapOf<String, Int>()
     payload.symbols.forEachIndexed { i, s ->
         localIndex[s.qualifiedName] = i
     }
+
+    // Count valid edges.
+    val validEdges = payload.edges.count { localIndex.containsKey(it.source) && localIndex.containsKey(it.target) }
+
+    // Header with session=true marker.
+    b.append("GCF tool=${payload.tool} budget=${payload.tokenBudget} tokens=${payload.tokensUsed} symbols=${payload.symbols.size} edges=$validEdges session=true")
+    if (payload.packRoot.isNotEmpty()) {
+        b.append(" pack_root=${payload.packRoot}")
+    }
+    b.append('\n')
 
     // Track which are new.
     data class SymbolEntry(val symbol: Symbol, val isNew: Boolean)
@@ -113,7 +116,7 @@ fun encodeWithSession(payload: Payload, session: Session?): String {
 
     // Edges section.
     if (payload.edges.isNotEmpty()) {
-        b.append("## edges\n")
+        b.append("## edges [$validEdges]\n")
         for (e in payload.edges) {
             val srcIdx = localIndex[e.source] ?: continue
             val tgtIdx = localIndex[e.target] ?: continue
