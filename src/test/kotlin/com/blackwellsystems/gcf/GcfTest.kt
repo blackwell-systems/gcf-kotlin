@@ -388,9 +388,9 @@ class GcfTest {
             )
         )
         val output = encodeGeneric(data)
-        assertContains(output, "## employees [2]{department,id,name,salary}")
-        assertContains(output, "Engineering|1|Alice|95000")
-        assertContains(output, "Sales|2|Bob|72000")
+        assertContains(output, "## employees [2]{id,name,department,salary}")
+        assertContains(output, "1|Alice|Engineering|95000")
+        assertContains(output, "2|Bob|Sales|72000")
     }
 
     @Test
