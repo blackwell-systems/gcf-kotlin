@@ -468,7 +468,7 @@ class GcfTest {
         val output = encodeGeneric(data)
         assertContains(output, "@0 Alice")
         assertContains(output, "@1 Bob")
-        assertContains(output, "## tags")
+        assertContains(output, "tags[2]: admin,user")
     }
 
     @Test
@@ -477,10 +477,7 @@ class GcfTest {
             "items" to listOf(1, "two", true)
         )
         val output = encodeGeneric(data)
-        assertContains(output, "## items [3]")
-        assertContains(output, "@0 1")
-        assertContains(output, "@1 two")
-        assertContains(output, "@2 true")
+        assertContains(output, "items[3]: 1,two,true")
     }
 
     @Test
