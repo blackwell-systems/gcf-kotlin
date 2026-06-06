@@ -47,19 +47,32 @@ Don't want to change code? Use the [MCP proxy](https://github.com/blackwell-syst
 ```kotlin
 import com.blackwellsystems.gcf.*
 
-val payload = Payload(
-    tool = "context_for_task",
-    tokenBudget = 5000,
-    tokensUsed = 1847,
-    symbols = listOf(
-        Symbol(qualifiedName = "pkg.AuthMiddleware", kind = "function", score = 0.78, provenance = "lsp_resolved", distance = 0),
-        Symbol(qualifiedName = "pkg.NewServer", kind = "function", score = 0.54, provenance = "lsp_resolved", distance = 1),
-    ),
-    edges = listOf(
-        Edge(source = "pkg.NewServer", target = "pkg.AuthMiddleware", edgeType = "calls")
+val output = encodeGeneric(mapOf(
+    "employees" to listOf(
+        mapOf("id" to 1, "name" to "Alice", "department" to "Engineering", "salary" to 95000),
+        mapOf("id" to 2, "name" to "Bob", "department" to "Sales", "salary" to 72000),
     )
-)
+))
+```
 
+Output:
+```
+## employees [2]{department,id,name,salary}
+Engineering|1|Alice|95000
+Sales|2|Bob|72000
+```
+
+## Graph Profile
+
+```kotlin
+val payload = Payload(
+    tool = "context_for_task", tokenBudget = 5000, tokensUsed = 1847,
+    symbols = listOf(
+        Symbol(qualifiedName = "pkg.Auth", kind = "function", score = 0.78, provenance = "lsp", distance = 0),
+        Symbol(qualifiedName = "pkg.Server", kind = "function", score = 0.54, provenance = "lsp", distance = 1),
+    ),
+    edges = listOf(Edge(source = "pkg.Server", target = "pkg.Auth", edgeType = "calls"))
+)
 val output = encode(payload)
 ```
 
@@ -67,9 +80,9 @@ Output:
 ```
 GCF tool=context_for_task budget=5000 tokens=1847 symbols=2 edges=1
 ## targets
-@0 fn pkg.AuthMiddleware 0.78 lsp_resolved
+@0 fn pkg.Auth 0.78 lsp
 ## related
-@1 fn pkg.NewServer 0.54 lsp_resolved
+@1 fn pkg.Server 0.54 lsp
 ## edges [1]
 @0<@1 calls
 ```
