@@ -61,7 +61,7 @@ fun formatNumberValue(f: Double): String {
     if (a >= 1e-6 && a < 1e21) {
         var s = f.toBigDecimal().stripTrailingZeros().toPlainString()
         // Strip trailing .0 for integer-valued floats
-        if (s.endsWith(".0") && f == kotlin.math.truncate(f)) {
+        if (s.endsWith(".0") && f == truncateToZero(f)) {
             s = s.dropLast(2)
         }
         return s
@@ -217,4 +217,4 @@ fun findClosingBraceIdx(s: String): Int? {
     return null
 }
 
-private fun kotlin.math.truncate(d: Double): Double = if (d >= 0) kotlin.math.floor(d) else kotlin.math.ceil(d)
+private fun truncateToZero(d: Double): Double = if (d >= 0) kotlin.math.floor(d) else kotlin.math.ceil(d)

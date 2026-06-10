@@ -25,7 +25,7 @@ class GcfTest {
             )
         )
         val output = encode(p)
-        assertContains(output, "GCF tool=context_for_task budget=5000 tokens=1847 symbols=2")
+        assertContains(output, "GCF profile=graph tool=context_for_task budget=5000 tokens=1847 symbols=2")
         assertContains(output, "## targets")
         assertContains(output, "@0 fn pkg.AuthMiddleware 0.78 lsp_resolved")
         assertContains(output, "## related")
@@ -116,7 +116,7 @@ class GcfTest {
     @Test
     fun `decode basic payload`() {
         val input = """
-            GCF tool=context_for_task budget=5000 tokens=1847 symbols=2
+            GCF profile=graph tool=context_for_task budget=5000 tokens=1847 symbols=2
             ## targets
             @0 fn pkg.AuthMiddleware 0.78 lsp_resolved
             ## related
@@ -157,7 +157,7 @@ class GcfTest {
     @Test
     fun `decode rejects less than 5 fields in symbol line`() {
         val input = """
-            GCF tool=test budget=0 tokens=0 symbols=1
+            GCF profile=graph tool=test budget=0 tokens=0 symbols=1
             ## targets
             @0 fn pkg.Func 0.5
         """.trimIndent()
@@ -168,7 +168,7 @@ class GcfTest {
     @Test
     fun `decode rejects unknown edge IDs`() {
         val input = """
-            GCF tool=test budget=0 tokens=0 symbols=1
+            GCF profile=graph tool=test budget=0 tokens=0 symbols=1
             ## targets
             @0 fn pkg.Func 0.5 lsp
             ## edges
@@ -181,7 +181,7 @@ class GcfTest {
     @Test
     fun `decode expands kind abbreviations`() {
         val input = """
-            GCF tool=test budget=0 tokens=0 symbols=3
+            GCF profile=graph tool=test budget=0 tokens=0 symbols=3
             ## targets
             @0 iface pkg.Handler 0.9 lsp
             @1 ext pkg.Library 0.8 ast
@@ -196,7 +196,7 @@ class GcfTest {
 
     @Test
     fun `decode tolerates carriage return`() {
-        val input = "GCF tool=test budget=0 tokens=0 symbols=1\r\n## targets\r\n@0 fn pkg.Func 0.50 lsp\r\n"
+        val input = "GCF profile=graph tool=test budget=0 tokens=0 symbols=1\r\n## targets\r\n@0 fn pkg.Func 0.50 lsp\r\n"
         val p = decode(input)
         assertEquals(1, p.symbols.size)
         assertEquals("pkg.Func", p.symbols[0].qualifiedName)
@@ -204,7 +204,7 @@ class GcfTest {
 
     @Test
     fun `decode with pack root`() {
-        val input = "GCF tool=test budget=0 tokens=0 symbols=0 pack_root=deadbeef\n"
+        val input = "GCF profile=graph tool=test budget=0 tokens=0 symbols=0 pack_root=deadbeef\n"
         val p = decode(input)
         assertEquals("deadbeef", p.packRoot)
     }
@@ -335,7 +335,7 @@ class GcfTest {
             fullTokens = 200
         )
         val output = encodeDelta(delta)
-        assertContains(output, "GCF tool=context_for_task delta=true base_root=aaa111 new_root=bbb222 tokens=30 savings=85%")
+        assertContains(output, "GCF profile=graph tool=context_for_task delta=true base_root=aaa111 new_root=bbb222 tokens=30 savings=85%")
         assertContains(output, "## removed")
         assertContains(output, "fn pkg.OldFunc")
         assertContains(output, "## added")
@@ -395,15 +395,15 @@ class GcfTest {
 
     @Test
     fun `generic primitive`() {
-        assertEquals("42", encodeGeneric(42))
-        assertEquals("3.14", encodeGeneric(3.14))
-        assertEquals("true", encodeGeneric(true))
-        assertEquals("hello", encodeGeneric("hello"))
+        assertEquals("GCF profile=generic\n=42\n", encodeGeneric(42))
+        assertEquals("GCF profile=generic\n=3.14\n", encodeGeneric(3.14))
+        assertEquals("GCF profile=generic\n=true\n", encodeGeneric(true))
+        assertEquals("GCF profile=generic\n=hello\n", encodeGeneric("hello"))
     }
 
     @Test
     fun `generic null`() {
-        assertEquals("", encodeGeneric(null))
+        assertEquals("GCF profile=generic\n=-\n", encodeGeneric(null))
     }
 
     @Test
@@ -466,9 +466,9 @@ class GcfTest {
             )
         )
         val output = encodeGeneric(data)
-        assertContains(output, "@0 Alice")
-        assertContains(output, "@1 Bob")
-        assertContains(output, "tags[2]: admin,user")
+        assertContains(output, "@0 Alice|^")
+        assertContains(output, "@1 Bob|^")
+        assertContains(output, ".tags [2]: admin,user")
     }
 
     @Test
@@ -494,7 +494,7 @@ class GcfTest {
             mapOf("id" to 2, "name" to "y"),
         )
         val output = encodeGeneric(data)
-        assertContains(output, "## root [2]{")
+        assertContains(output, "## [2]{")
         assertContains(output, "1|x")
         assertContains(output, "2|y")
     }
@@ -503,14 +503,14 @@ class GcfTest {
     fun `generic empty map`() {
         val data = emptyMap<String, Any?>()
         val output = encodeGeneric(data)
-        assertEquals("", output)
+        assertEquals("GCF profile=generic\n", output)
     }
 
     @Test
     fun `generic empty list`() {
         val data = emptyList<Any?>()
         val output = encodeGeneric(data)
-        assertEquals("", output)
+        assertEquals("GCF profile=generic\n## [0]\n", output)
     }
 
     // -- Kind Maps --
