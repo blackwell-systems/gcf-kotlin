@@ -75,7 +75,7 @@ fun encodeWithSession(payload: Payload, session: Session?): String {
     val validEdges = payload.edges.count { localIndex.containsKey(it.source) && localIndex.containsKey(it.target) }
 
     // Header with session=true marker.
-    b.append("GCF tool=${payload.tool} budget=${payload.tokenBudget} tokens=${payload.tokensUsed} symbols=${payload.symbols.size} edges=$validEdges session=true")
+    b.append("GCF profile=graph tool=${payload.tool} budget=${payload.tokenBudget} tokens=${payload.tokensUsed} symbols=${payload.symbols.size} edges=$validEdges session=true")
     if (payload.packRoot.isNotEmpty()) {
         b.append(" pack_root=${payload.packRoot}")
     }

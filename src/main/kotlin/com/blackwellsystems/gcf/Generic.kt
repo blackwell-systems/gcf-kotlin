@@ -1,220 +1,159 @@
 package com.blackwellsystems.gcf
 
 /**
- * Encode any value into GCF tabular format.
+ * Encode any value into GCF v2.0 generic profile.
  * Handles Map, List, String, Number, Boolean, and null.
- * Arrays of uniform maps get tabular rows. Nested maps use `## key` section headers.
  */
 @Suppress("UNCHECKED_CAST")
 fun encodeGeneric(data: Any?): String {
-    if (data == null) return ""
-
-    return when (data) {
-        is Map<*, *> -> {
-            val map = data as Map<String, Any?>
-            val lines = encodeObjectEntries(map, 0)
-            if (lines.isEmpty()) "" else lines.joinToString("\n") + "\n"
-        }
-        is List<*> -> {
-            if (data.isEmpty()) return ""
-            val lines = encodeArray(data, "root", 0)
-            if (lines.isEmpty()) "" else lines.joinToString("\n") + "\n"
-        }
-        is String -> data
-        is Number -> formatNumber(data)
-        is Boolean -> data.toString()
-        else -> data.toString()
-    }
+    val out = StringBuilder("GCF profile=generic\n")
+    encodeRootValue(data, out)
+    return out.toString()
 }
 
-private fun formatNumber(n: Number): String {
-    return when (n) {
-        is Int, is Long, is Short, is Byte -> n.toLong().toString()
-        is Float -> {
-            val d = n.toDouble()
-            if (d == d.toLong().toDouble()) d.toLong().toString() else d.toString()
-        }
-        is Double -> {
-            if (n == n.toLong().toDouble() && !n.isInfinite() && !n.isNaN()) {
-                n.toLong().toString()
-            } else {
-                n.toString()
-            }
-        }
-        else -> n.toString()
+private fun encodeRootValue(v: Any?, out: StringBuilder) {
+    when {
+        v == null -> out.append("=-\n")
+        v is Map<*, *> -> encodeObject(v as Map<String, Any?>, out, 0)
+        v is List<*> -> encodeRootArray(v, out)
+        else -> { out.append("="); out.append(formatScalarValue(v)); out.append("\n") }
     }
-}
-
-private fun formatValue(v: Any?): String {
-    return when (v) {
-        null -> "-"
-        is Boolean -> v.toString()
-        is Number -> formatNumber(v)
-        is String -> {
-            if (v.isEmpty()) return "\"\""
-            if (v.contains('|') || v.contains('\n')) {
-                val escaped = v.replace("\"", "\\\"")
-                return "\"$escaped\""
-            }
-            v
-        }
-        else -> "-"
-    }
-}
-
-private fun indent(depth: Int): String = "  ".repeat(depth)
-
-private fun isObject(v: Any?): Boolean = v is Map<*, *>
-
-private fun isArray(v: Any?): Boolean = v is List<*>
-
-@Suppress("UNCHECKED_CAST")
-private fun isUniformObjectArray(arr: List<*>): Boolean {
-    if (arr.isEmpty()) return false
-    val first = arr[0]
-    if (first !is Map<*, *>) return false
-    val firstMap = first as Map<String, Any?>
-    if (firstMap.isEmpty()) return false
-    val firstKeys = firstMap.keys.toSet()
-
-    val checkCount = minOf(arr.size, 5)
-    for (i in 1 until checkCount) {
-        val item = arr[i]
-        if (item !is Map<*, *>) return false
-        val itemMap = item as Map<String, Any?>
-        val itemKeys = itemMap.keys.toSet()
-        val overlap = firstKeys.intersect(itemKeys).size
-        if (overlap.toDouble() < firstKeys.size.toDouble() * 0.7) return false
-    }
-    return true
 }
 
 @Suppress("UNCHECKED_CAST")
-private fun encodeArray(arr: List<*>, name: String, depth: Int): List<String> {
+private fun encodeObject(map: Map<String, Any?>, out: StringBuilder, depth: Int) {
     val prefix = indent(depth)
-
-    if (arr.isEmpty()) {
-        return if (name.isNotEmpty()) listOf("$prefix## $name [0]") else emptyList()
-    }
-
-    if (isUniformObjectArray(arr)) {
-        return encodeTabular(arr, name, depth)
-    }
-
-    // Primitive array: inline as comma-separated values.
-    val allPrimitive = arr.all { !isObject(it) && !isArray(it) }
-    if (allPrimitive) {
-        val vals = arr.joinToString(",") { formatValue(it) }
-        return listOf("$prefix$name[${arr.size}]: $vals")
-    }
-
-    // Non-uniform with objects: per-item encoding.
-    val lines = mutableListOf<String>()
-    if (name.isNotEmpty()) {
-        lines.add("$prefix## $name [${arr.size}]")
-    }
-    arr.forEachIndexed { i, item ->
+    for ((key, value) in map) {
+        val fk = formatKeyValue(key)
         when {
-            isObject(item) -> {
-                lines.add("$prefix@$i")
-                lines.addAll(encodeObjectEntries(item as Map<String, Any?>, depth + 1))
+            value is Map<*, *> -> {
+                out.append("${prefix}## $fk\n")
+                encodeObject(value as Map<String, Any?>, out, depth + 1)
             }
-            isArray(item) -> {
-                lines.addAll(encodeArray(item as List<*>, i.toString(), depth + 1))
-            }
-            else -> {
-                lines.add("$prefix@$i ${formatValue(item)}")
-            }
+            value is List<*> -> encodeNamedArray(fk, value, out, depth)
+            else -> out.append("$prefix$fk=${formatScalarValue(value)}\n")
         }
     }
-    return lines
+}
+
+private fun encodeRootArray(arr: List<*>, out: StringBuilder) {
+    if (arr.isEmpty()) { out.append("## [0]\n"); return }
+    if (allPrimitives(arr)) {
+        val vals = arr.joinToString(",") { formatScalarValue(it, ',') }
+        out.append("## [${arr.size}]: $vals\n"); return
+    }
+    val fields = tabularFields(arr)
+    if (fields != null) { encodeTabular("## ", arr, fields, out, 0); return }
+    encodeExpanded("## ", arr, out, 0)
+}
+
+private fun encodeNamedArray(name: String, arr: List<*>, out: StringBuilder, depth: Int) {
+    val prefix = indent(depth)
+    if (arr.isEmpty()) { out.append("${prefix}## $name [0]\n"); return }
+    if (allPrimitives(arr)) {
+        val vals = arr.joinToString(",") { formatScalarValue(it, ',') }
+        out.append("$prefix${name}[${arr.size}]: $vals\n"); return
+    }
+    val fields = tabularFields(arr)
+    if (fields != null) { encodeTabular("${prefix}## $name ", arr, fields, out, depth); return }
+    encodeExpanded("${prefix}## $name ", arr, out, depth)
 }
 
 @Suppress("UNCHECKED_CAST")
-private fun encodeTabular(arr: List<*>, name: String, depth: Int): List<String> {
-    val prefix = indent(depth)
-    val first = arr[0] as Map<String, Any?>
-
-    // Collect all keys from all items (preserving insertion order from first, then extras).
-    val allKeys = linkedSetOf<String>()
+private fun tabularFields(arr: List<*>): List<String>? {
+    if (arr.isEmpty()) return null
+    val fieldOrder = mutableListOf<String>()
+    val seen = mutableSetOf<String>()
     for (item in arr) {
-        if (item is Map<*, *>) {
-            for (k in (item as Map<String, Any?>).keys) {
-                allKeys.add(k)
-            }
+        val map = item as? Map<*, *> ?: return null
+        for (k in map.keys) {
+            val key = k as? String ?: return null
+            if (key !in seen) { fieldOrder.add(key); seen.add(key) }
         }
     }
+    return if (fieldOrder.isEmpty()) null else fieldOrder
+}
 
-    // Separate primitive from nested fields (sampled from first element).
-    val primitiveFields = mutableListOf<String>()
-    val nestedFields = mutableListOf<String>()
-    for (key in allKeys) {
-        val sample = first[key]
-        if (isObject(sample) || isArray(sample)) {
-            nestedFields.add(key)
-        } else {
-            primitiveFields.add(key)
-        }
-    }
-
-    // Header.
-    val lines = mutableListOf<String>()
-    val fieldList = primitiveFields.joinToString(",")
-    val header = if (name.isNotEmpty()) {
-        "## $name [${arr.size}]{$fieldList}"
-    } else {
-        "## [${arr.size}]{$fieldList}"
-    }
-    lines.add("$prefix$header")
-
-    val hasNested = nestedFields.isNotEmpty()
+@Suppress("UNCHECKED_CAST")
+private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<String>, out: StringBuilder, depth: Int) {
+    val prefix = indent(depth)
+    val fmtFields = fields.joinToString(",") { formatKeyValue(it) }
+    out.append("$headerPrefix[${arr.size}]{$fmtFields}\n")
 
     for ((i, item) in arr.withIndex()) {
-        if (item !is Map<*, *>) continue
-        val obj = item as Map<String, Any?>
+        val map = item as? Map<String, Any?> ?: continue
+        val cells = mutableListOf<String>()
+        val attachments = mutableListOf<Pair<String, Any>>()
+        var rowHasAttachment = false
 
-        val vals = primitiveFields.map { f ->
-            val v = obj[f]
-            if (v == null) "-" else formatValue(v)
+        for (f in fields) {
+            if (f !in map) { cells.add("~"); continue }
+            val v = map[f]
+            if (v == null) { cells.add("-"); continue }
+            if (v is Map<*, *> || v is List<*>) {
+                cells.add("^")
+                attachments.add(f to v)
+                rowHasAttachment = true
+            } else {
+                cells.add(formatScalarValue(v, '|'))
+            }
         }
 
-        val rowStr = vals.joinToString("|")
+        val row = cells.joinToString("|")
+        if (rowHasAttachment) out.append("${prefix}@$i $row\n") else out.append("$prefix$row\n")
 
-        if (hasNested) {
-            lines.add("$prefix@$i $rowStr")
-            // Inline nested fields after the row.
-            for (nf in nestedFields) {
-                val nv = obj[nf] ?: continue
-                when {
-                    isArray(nv) -> lines.addAll(encodeArray(nv as List<*>, nf, depth + 1))
-                    isObject(nv) -> {
-                        lines.add("${indent(depth + 1)}.$nf")
-                        lines.addAll(encodeObjectEntries(nv as Map<String, Any?>, depth + 2))
-                    }
+        for ((attName, attVal) in attachments) {
+            val attPrefix = "$prefix  "
+            val fk = formatKeyValue(attName)
+            when (attVal) {
+                is Map<*, *> -> {
+                    out.append("$attPrefix.$fk {}\n")
+                    encodeObject(attVal as Map<String, Any?>, out, depth + 2)
                 }
+                is List<*> -> encodeAttachmentArray(attPrefix, fk, attVal, out, depth + 2)
             }
-        } else {
-            lines.add("$prefix$rowStr")
         }
     }
-    return lines
+}
+
+private fun encodeAttachmentArray(attPrefix: String, fk: String, arr: List<*>, out: StringBuilder, depth: Int) {
+    if (arr.isEmpty()) { out.append("$attPrefix.$fk [0]\n"); return }
+    if (allPrimitives(arr)) {
+        val vals = arr.joinToString(",") { formatScalarValue(it, ',') }
+        out.append("$attPrefix.$fk [${arr.size}]: $vals\n"); return
+    }
+    val fields = tabularFields(arr)
+    if (fields != null) { encodeTabular("$attPrefix.$fk ", arr, fields, out, depth); return }
+    encodeExpanded("$attPrefix.$fk ", arr, out, depth)
 }
 
 @Suppress("UNCHECKED_CAST")
-private fun encodeObjectEntries(map: Map<String, Any?>, depth: Int): List<String> {
+private fun encodeExpanded(headerPrefix: String, arr: List<*>, out: StringBuilder, depth: Int) {
     val prefix = indent(depth)
-    val lines = mutableListOf<String>()
-
-    for ((key, value) in map.toSortedMap()) {
-        if (value == null) continue
+    out.append("$headerPrefix[${arr.size}]\n")
+    for ((i, item) in arr.withIndex()) {
         when {
-            isArray(value) -> lines.addAll(encodeArray(value as List<*>, key, depth))
-            isObject(value) -> {
-                lines.add("${indent(depth + 1)}## $key")
-                lines.addAll(encodeObjectEntries(value as Map<String, Any?>, depth + 2))
+            item is Map<*, *> -> {
+                out.append("${prefix}@$i {}\n")
+                encodeObject(item as Map<String, Any?>, out, depth + 1)
             }
-            else -> lines.add("$prefix$key=${formatValue(value)}")
+            item is List<*> -> encodeExpandedArrayItem(prefix, i, item, out, depth)
+            else -> out.append("${prefix}@$i =${formatScalarValue(item)}\n")
         }
     }
-    return lines
 }
+
+private fun encodeExpandedArrayItem(prefix: String, idx: Int, arr: List<*>, out: StringBuilder, depth: Int) {
+    if (arr.isEmpty()) { out.append("${prefix}@$idx [0]\n"); return }
+    if (allPrimitives(arr)) {
+        val vals = arr.joinToString(",") { formatScalarValue(it, ',') }
+        out.append("${prefix}@$idx [${arr.size}]: $vals\n"); return
+    }
+    val fields = tabularFields(arr)
+    if (fields != null) { encodeTabular("${prefix}@$idx ", arr, fields, out, depth + 1); return }
+    encodeExpanded("${prefix}@$idx ", arr, out, depth + 1)
+}
+
+private fun allPrimitives(arr: List<*>): Boolean = arr.all { it !is Map<*, *> && it !is List<*> }
+
+private fun indent(depth: Int): String = "  ".repeat(depth)

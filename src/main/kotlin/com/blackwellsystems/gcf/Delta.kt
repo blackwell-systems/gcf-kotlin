@@ -12,7 +12,7 @@ fun encodeDelta(delta: DeltaPayload): String {
     } else {
         0.0
     }
-    b.append("GCF tool=${delta.tool} delta=true base_root=${delta.baseRoot} new_root=${delta.newRoot} tokens=${delta.deltaTokens} savings=${"%.0f".format(savings)}%\n")
+    b.append("GCF profile=graph tool=${delta.tool} delta=true base_root=${delta.baseRoot} new_root=${delta.newRoot} tokens=${delta.deltaTokens} savings=${"%.0f".format(savings)}%\n")
 
     // Removed symbols: short references (consumer already has the full declaration).
     if (delta.removed.isNotEmpty()) {

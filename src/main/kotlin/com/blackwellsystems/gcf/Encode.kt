@@ -16,7 +16,7 @@ fun encode(payload: Payload): String {
     val validEdges = payload.edges.count { symIndex.containsKey(it.source) && symIndex.containsKey(it.target) }
 
     // Header line.
-    b.append("GCF tool=${payload.tool} budget=${payload.tokenBudget} tokens=${payload.tokensUsed} symbols=${payload.symbols.size} edges=$validEdges")
+    b.append("GCF profile=graph tool=${payload.tool} budget=${payload.tokenBudget} tokens=${payload.tokensUsed} symbols=${payload.symbols.size} edges=$validEdges")
     if (payload.packRoot.isNotEmpty()) {
         b.append(" pack_root=${payload.packRoot}")
     }

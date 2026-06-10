@@ -30,7 +30,7 @@ class StreamEncoder(
     private var edgesStarted = false
 
     init {
-        val parts = mutableListOf("GCF tool=$tool")
+        val parts = mutableListOf("GCF profile=graph tool=$tool")
         if (options.tokenBudget > 0) parts.add("budget=${options.tokenBudget}")
         if (options.tokensUsed > 0) parts.add("tokens=${options.tokensUsed}")
         if (options.packRoot.isNotEmpty()) parts.add("pack_root=${options.packRoot}")
@@ -111,16 +111,16 @@ class StreamEncoder(
         }
     }
 
-    /** Emit ## _summary trailer with final counts. */
+    /** Emit ##! summary trailer with final counts. */
     @Synchronized
     fun close() {
-        val sections = mutableListOf<String>()
-        for ((g, c) in groupCounts) {
-            if (c > 0) sections.add("$g:$c")
+        val counts = mutableListOf<String>()
+        for ((_, c) in groupCounts) {
+            if (c > 0) counts.add(c.toString())
         }
-        if (edgeCount > 0) sections.add("edges:$edgeCount")
+        if (edgeCount > 0) counts.add(edgeCount.toString())
 
-        writer.write("## _summary symbols=$nextID edges=$edgeCount sections=${sections.joinToString(",")}\n")
+        writer.write("##! summary symbols=$nextID edges=$edgeCount counts=${counts.joinToString(",")}\n")
         writer.flush()
     }
 

@@ -31,6 +31,9 @@ fun decode(input: String): Payload {
         val trimmed = line.trimEnd('\r')
         if (trimmed.isEmpty()) continue
 
+        // Skip ##! summary trailer.
+        if (trimmed.startsWith("##! ")) continue
+
         // Group header.
         if (trimmed.startsWith("## ")) {
             var group = trimmed.substring(3)

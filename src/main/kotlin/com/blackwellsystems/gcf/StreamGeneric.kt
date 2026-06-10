@@ -79,7 +79,7 @@ class GenericStreamEncoder(private val writer: Writer) {
         writer.flush()
     }
 
-    /** Emit the ## _summary trailer with final counts. */
+    /** Emit the ##! summary trailer with final counts. */
     @Synchronized
     fun close() {
         if (current != null) {
@@ -87,12 +87,8 @@ class GenericStreamEncoder(private val writer: Writer) {
         }
         if (sections.isEmpty()) return
 
-        var totalRows = 0
-        val sectionParts = sections.map { (name, count) ->
-            totalRows += count
-            "$name:$count"
-        }
-        writer.write("## _summary rows=$totalRows sections=${sectionParts.joinToString(",")}\n")
+        val counts = sections.map { (_, count) -> count.toString() }
+        writer.write("##! summary counts=${counts.joinToString(",")}\n")
         writer.flush()
     }
 
