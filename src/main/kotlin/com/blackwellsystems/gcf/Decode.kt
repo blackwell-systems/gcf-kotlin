@@ -18,7 +18,7 @@ fun decode(input: String): Payload {
 
     val headerResult = parseHeader(header.substring(4))
     if (headerResult.tool.isEmpty()) {
-        throw DecodeException("gcf: header missing required 'tool' field")
+        throw DecodeException("missing_tool: header missing required 'tool' field")
     }
 
     val symbols = mutableListOf<Symbol>()
@@ -26,6 +26,8 @@ fun decode(input: String): Payload {
     var currentDistance = 0
     var inEdges = false
     val edges = mutableListOf<Edge>()
+    val isDelta = "delta=true" in header
+    val validDeltaSections = setOf("removed", "added", "edges_removed", "edges_added")
 
     for (line in lines.drop(1)) {
         val trimmed = line.trimEnd('\r')
@@ -41,6 +43,9 @@ fun decode(input: String): Payload {
             val bracketIdx = group.indexOf(" [")
             if (bracketIdx >= 0) {
                 group = group.substring(0, bracketIdx)
+            }
+            if (isDelta && group !in validDeltaSections) {
+                throw DecodeException("malformed_delta: invalid delta section \"$group\"")
             }
             inEdges = group == "edges"
             if (!inEdges) {
@@ -115,22 +120,22 @@ private fun parseHeader(fields: String): HeaderResult {
 
 private fun parseSymbolLine(line: String, distance: Int): Pair<Symbol, Int> {
     if (!line.startsWith("@")) {
-        throw DecodeException("gcf: expected symbol line starting with @, got \"$line\"")
+        throw DecodeException("invalid_node_line: expected symbol line starting with @, got \"$line\"")
     }
 
     val parts = line.trim().split("\\s+".toRegex())
     if (parts.size < 5) {
-        throw DecodeException("gcf: symbol line needs at least 5 fields, got ${parts.size} in \"$line\"")
+        throw DecodeException("invalid_node_line: symbol line needs at least 5 fields, got ${parts.size} in \"$line\"")
     }
 
     val idStr = parts[0].substring(1) // strip @
     val id = idStr.toIntOrNull()
-        ?: throw DecodeException("gcf: invalid symbol id \"$idStr\"")
+        ?: throw DecodeException("invalid_symbol_id: invalid symbol id \"$idStr\"")
 
     val kind = expandKind(parts[1])
     val qname = parts[2]
     val score = parts[3].toDoubleOrNull()
-        ?: throw DecodeException("gcf: invalid score \"${parts[3]}\"")
+        ?: throw DecodeException("invalid_score: invalid score \"${parts[3]}\"")
     val provenance = parts[4]
 
     return Pair(
@@ -154,7 +159,7 @@ private fun parseEdgeLine(line: String, symByID: Map<Int, Symbol>): Edge {
     val ref = parts[0]
     val ltIdx = ref.indexOf('<')
     if (ltIdx < 0) {
-        throw DecodeException("gcf: edge line missing '<' separator in \"$ref\"")
+        throw DecodeException("invalid_edge_syntax: edge line missing '<' separator in \"$ref\"")
     }
 
     val targetIDStr = ref.substring(1, ltIdx) // strip leading @
@@ -166,9 +171,9 @@ private fun parseEdgeLine(line: String, symByID: Map<Int, Symbol>): Edge {
         ?: throw DecodeException("gcf: invalid source id \"$sourceIDStr\"")
 
     val targetSym = symByID[targetID]
-        ?: throw DecodeException("gcf: edge references unknown symbol id(s): target=$targetID source=$sourceID")
+        ?: throw DecodeException("unknown_edge_reference: edge references unknown symbol id(s): target=$targetID source=$sourceID")
     val sourceSym = symByID[sourceID]
-        ?: throw DecodeException("gcf: edge references unknown symbol id(s): target=$targetID source=$sourceID")
+        ?: throw DecodeException("unknown_edge_reference: edge references unknown symbol id(s): target=$targetID source=$sourceID")
 
     val edgeType = parts[1]
     val status = if (parts.size >= 3) parts[2] else ""
