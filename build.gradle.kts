@@ -21,6 +21,7 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    environment("GCF_ITERATIONS", System.getenv("GCF_ITERATIONS") ?: "100000")
 }
 
 kotlin {
