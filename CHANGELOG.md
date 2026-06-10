@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.0.1 (2026-06-10)
+
+- CLI: `encode`, `decode`, `encode-generic`, `decode-generic` subcommands
+- Both graph and generic profiles supported from the command line
+- Fat jar target for standalone execution
+
+## v1.0.0 (2026-06-07)
+
+- SPEC v2.0 implementation: common scalar grammar, full JSON escaping, attachments, expanded form
+- 40M property-based round-trips with zero failures
+- 133/141 conformance fixtures passing
+
 ## v0.5.0 (2026-06-05)
 
 - `GenericStreamEncoder`: zero-buffering tabular streaming encode (beginArray/writeRow/endArray/writeKV/writeSection/writeInlineArray)

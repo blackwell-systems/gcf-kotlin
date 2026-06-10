@@ -2,6 +2,15 @@ plugins {
     kotlin("jvm") version "1.9.22"
     kotlin("plugin.serialization") version "1.9.22"
     `maven-publish`
+    application
+}
+
+application {
+    mainClass.set("com.blackwellsystems.gcf.CliKt")
+}
+
+tasks.named<JavaExec>("run") {
+    standardInput = System.`in`
 }
 
 group = "com.blackwellsystems"
@@ -26,6 +35,21 @@ tasks.test {
 
 kotlin {
     jvmToolchain(21)
+}
+
+tasks.register<Jar>("fatJar") {
+    archiveBaseName.set("gcf")
+    archiveClassifier.set("")
+    archiveVersion.set("")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest {
+        attributes["Main-Class"] = "com.blackwellsystems.gcf.CliKt"
+    }
+    from(sourceSets.main.get().output)
+    dependsOn(configurations.runtimeClasspath)
+    from({
+        configurations.runtimeClasspath.get().filter { it.name.endsWith("jar") }.map { zipTree(it) }
+    })
 }
 
 publishing {
