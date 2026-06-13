@@ -1,7 +1,7 @@
 package com.blackwellsystems.gcf
 
 /**
- * Decode GCF v2.0 generic or graph profile text into a value.
+ * Decode GCF  generic or graph profile text into a value.
  */
 @Suppress("UNCHECKED_CAST")
 fun decodeGeneric(input: String): Any? {
@@ -79,6 +79,7 @@ private fun scalarToAny(sv: ScalarParsed): Any? = when (sv) {
     is ScalarParsed.StringVal -> sv.value
     is ScalarParsed.Missing -> throw IllegalArgumentException("invalid_missing")
     is ScalarParsed.Attachment -> throw IllegalArgumentException("invalid_attachment_marker")
+    is ScalarParsed.InlineAttachment -> throw IllegalArgumentException("invalid_inline_attachment_marker")
 }
 
 private fun parseObjectBody(lines: List<String>, start: Int, depth: Int, out: LinkedHashMap<String, Any?>): Int {
@@ -198,11 +199,92 @@ private fun parseArrayFromHeader(lines: List<String>, headerLine: Int, depth: In
     return items to consumed + 1
 }
 
+private fun parseAttachmentName(rest: String): Pair<String, String> {
+    if (rest.isNotEmpty() && rest[0] == '"') {
+        var j = 1
+        while (j < rest.length) {
+            if (rest[j] == '\\') { j += 2; continue }
+            if (rest[j] == '"') {
+                val name = parseQuotedStringValue(rest.substring(0, j + 1))
+                return name to rest.substring(j + 1)
+            }
+            j++
+        }
+        return "" to rest
+    }
+    val sp = rest.indexOf(' ')
+    return if (sp >= 0) rest.substring(0, sp) to rest.substring(sp) else rest to ""
+}
+
+private data class AttachmentResult(val name: String, val value: Any?, val consumed: Int, val parsedFields: List<String>?)
+
+@Suppress("UNCHECKED_CAST")
+private fun parseAttachment(lines: List<String>, lineIdx: Int, rest: String, depth: Int, sharedSchemas: MutableMap<String, List<String>>): AttachmentResult {
+    val (name, afterNameRaw) = parseAttachmentName(rest)
+    if (name.isEmpty() && !rest.startsWith("\"\"")) throw IllegalArgumentException("invalid attachment: $rest")
+    val afterName = afterNameRaw.trimStart()
+
+    if (afterName.startsWith("{}")) {
+        val nested = linkedMapOf<String, Any?>()
+        val consumed = parseObjectBody(lines, lineIdx + 1, depth, nested)
+        return AttachmentResult(name, nested, consumed + 1, null)
+    }
+    if (afterName.startsWith("[")) {
+        val cb = afterName.indexOf(']')
+        if (cb < 0) throw IllegalArgumentException("invalid_count: missing ]")
+        val afterClose = afterName.substring(cb + 1)
+
+        if (afterClose.startsWith("{")) {
+            val endBrace = findClosingBraceIdx(afterClose)
+            var parsedFields: List<String>? = null
+            if (endBrace != null) {
+                try { parsedFields = splitFieldDeclValue(afterClose.substring(0, endBrace + 1)) } catch (_: Exception) {}
+            }
+            val (arr, consumed) = parseArrayFromHeader(lines, lineIdx, depth, afterName)
+            return AttachmentResult(name, arr, consumed, parsedFields)
+        }
+
+        // Inline primitive array.
+        if (afterClose.startsWith(": ") || afterClose == ":") {
+            val (arr, consumed) = parseArrayFromHeader(lines, lineIdx, depth, afterName)
+            return AttachmentResult(name, arr, consumed, null)
+        }
+
+        // Shared schema.
+        if (name in sharedSchemas) {
+            val sf = sharedSchemas[name]!!
+            val countStr = afterName.substring(1, cb)
+            val count = if (countStr == "?") -1 else countStr.toInt()
+            if (count == 0) return AttachmentResult(name, emptyList<Any?>(), 1, null)
+            var useShared = true
+            val nextIdx = lineIdx + 1
+            val ind = "  ".repeat(depth)
+            if (nextIdx < lines.size) {
+                var nc = lines[nextIdx]
+                if (depth > 0 && nc.startsWith(ind)) nc = nc.drop(ind.length)
+                if (nc.trimStart().startsWith("@")) useShared = false
+            }
+            if (useShared) {
+                val (rows, consumed) = parseTabularBody(lines, lineIdx + 1, depth, sf, count)
+                if (count >= 0 && rows.size != count) throw IllegalArgumentException("count_mismatch: declared $count, got ${rows.size}")
+                return AttachmentResult(name, rows, consumed + 1, null)
+            }
+        }
+
+        val (arr, consumed) = parseArrayFromHeader(lines, lineIdx, depth, afterName)
+        return AttachmentResult(name, arr, consumed, null)
+    }
+    throw IllegalArgumentException("invalid attachment form: $afterName")
+}
+
 @Suppress("UNCHECKED_CAST")
 private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields: List<String>, expectedCount: Int): Pair<List<Any>, Int> {
     val ind = "  ".repeat(depth)
     val rows = mutableListOf<Any>()
     var i = start
+
+    val inlineSchemas = mutableMapOf<String, List<String>>()
+    val sharedArraySchemas = mutableMapOf<String, List<String>>()
 
     while (i < lines.size) {
         val line = lines[i]
@@ -210,7 +292,7 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
         if (content.startsWith("## ") || content.startsWith("##!")) break
         if (content.isNotEmpty() && content[0] == ' ') {
             val trimmed = content.trimStart()
-            if (trimmed.startsWith(".")) throw IllegalArgumentException("orphan_attachment: $trimmed")
+            if (trimmed.startsWith(".")) break
             break
         }
 
@@ -218,43 +300,118 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
         var rowHasID = false
         if (rowData.startsWith("@")) {
             val sp = rowData.indexOf(' ')
-            if (sp > 0) { rowData = rowData.substring(sp + 1); rowHasID = true }
+            if (sp > 0) {
+                val idStr = rowData.substring(1, sp)
+                if (idStr.all { it.isDigit() } && idStr.isNotEmpty()) {
+                    rowData = rowData.substring(sp + 1); rowHasID = true
+                }
+            }
         }
 
         val vals = splitRespectingQuotes(rowData, '|')
         if (vals.size != fields.size) throw IllegalArgumentException("row_width_mismatch: expected ${fields.size}, got ${vals.size}")
 
         val cellValues = linkedMapOf<String, Any?>()
-        val attachmentFields = mutableListOf<String>()
+        val traditionalAttFields = mutableListOf<String>()
+        val inlineAttFields = mutableListOf<String>()
+        val inlineAttOrder = mutableListOf<String>()
         val missingFields = mutableSetOf<String>()
+
         for ((j, f) in fields.withIndex()) {
-            when (val parsed = parseScalarValue(vals[j], tabularContext = true)) {
+            val cellVal = vals[j]
+            if (cellVal.startsWith("^{") && cellVal.endsWith("}")) {
+                val ifs = splitFieldDeclValue(cellVal.drop(1))
+                inlineSchemas[f] = ifs
+                inlineAttFields.add(f)
+                inlineAttOrder.add(f)
+                continue
+            }
+            when (val parsed = parseScalarValue(cellVal, tabularContext = true)) {
                 is ScalarParsed.Missing -> missingFields.add(f)
-                is ScalarParsed.Attachment -> attachmentFields.add(f)
+                is ScalarParsed.Attachment -> {
+                    if (f in inlineSchemas) { inlineAttFields.add(f); inlineAttOrder.add(f) }
+                    else traditionalAttFields.add(f)
+                }
+                is ScalarParsed.InlineAttachment -> {
+                    val ifs = splitFieldDeclValue(parsed.schema)
+                    inlineSchemas[f] = ifs
+                    inlineAttFields.add(f)
+                    inlineAttOrder.add(f)
+                }
                 else -> cellValues[f] = scalarToAny(parsed)
             }
         }
         i++
 
+        val allAttFields = traditionalAttFields + inlineAttFields
         val attachmentValues = linkedMapOf<String, Any?>()
-        if (rowHasID && attachmentFields.isNotEmpty()) {
-            val attIndent = ind + "  "
-            while (i < lines.size) {
-                val al = lines[i]
-                if (!al.startsWith(attIndent)) break
-                val ac = al.drop(attIndent.length)
-                if (!ac.startsWith(".")) break
-                val (name, value, consumed) = parseAttachment(lines, i, ac.drop(1), depth + 2)
-                if (name in attachmentValues) throw IllegalArgumentException("duplicate_attachment: $name")
-                attachmentValues[name] = value
-                i += consumed
+
+        if (rowHasID && allAttFields.isNotEmpty()) {
+            var inlineIdx = 0
+
+            while (i < lines.size && attachmentValues.size < allAttFields.size) {
+                val aLine = lines[i]
+                val aContent: String? = when {
+                    aLine.startsWith(ind + "  ") -> aLine.drop(ind.length + 2)
+                    depth == 0 || aLine.startsWith(ind) -> if (depth > 0) aLine.drop(ind.length) else aLine
+                    else -> null
+                }
+                if (aContent == null) break
+
+                if (aContent.startsWith(".")) {
+                    val rest = aContent.drop(1)
+                    val (attName, afterNameR) = parseAttachmentName(rest)
+                    val afterNameS = afterNameR.trimStart()
+
+                    val ifs = inlineSchemas[attName]
+                    if (ifs != null && !afterNameS.startsWith("{}") && !afterNameS.startsWith("[")) {
+                        val inlineVals = splitRespectingQuotes(afterNameS, '|')
+                        if (inlineVals.size != ifs.size) throw IllegalArgumentException("inline_width_mismatch: $attName expected ${ifs.size}, got ${inlineVals.size}")
+                        val obj = linkedMapOf<String, Any?>()
+                        for ((k, inf) in ifs.withIndex()) {
+                            val p = parseScalarValue(inlineVals[k], tabularContext = true)
+                            if (p !is ScalarParsed.Missing) obj[inf] = scalarToAny(p)
+                        }
+                        attachmentValues[attName] = obj
+                        i++; continue
+                    }
+
+                    val result = parseAttachment(lines, i, rest, depth + 2, sharedArraySchemas)
+                    if (rows.isEmpty() && result.parsedFields != null) {
+                        sharedArraySchemas[result.name] = result.parsedFields
+                    }
+                    attachmentValues[result.name] = result.value
+                    i += result.consumed; continue
+                }
+
+                // No-prefix: positional inline data.
+                var foundInline = false
+                var nextInlineField = ""
+                while (inlineIdx < inlineAttOrder.size) {
+                    val candidate = inlineAttOrder[inlineIdx]
+                    if (candidate !in attachmentValues) { nextInlineField = candidate; foundInline = true; break }
+                    inlineIdx++
+                }
+                if (!foundInline) break
+
+                val ifs = inlineSchemas[nextInlineField]!!
+                val inlineVals = splitRespectingQuotes(aContent, '|')
+                if (inlineVals.size != ifs.size) throw IllegalArgumentException("inline_width_mismatch: $nextInlineField expected ${ifs.size}, got ${inlineVals.size}")
+                val obj = linkedMapOf<String, Any?>()
+                for ((k, inf) in ifs.withIndex()) {
+                    val p = parseScalarValue(inlineVals[k], tabularContext = true)
+                    if (p !is ScalarParsed.Missing) obj[inf] = scalarToAny(p)
+                }
+                attachmentValues[nextInlineField] = obj
+                inlineIdx++; i++
             }
-            for (f in attachmentFields) {
+
+            for (f in allAttFields) {
                 if (f !in attachmentValues) throw IllegalArgumentException("missing_attachment: $f")
             }
         }
 
-        if (!rowHasID || attachmentFields.isEmpty()) {
+        if (!rowHasID || allAttFields.isEmpty()) {
             val attIndent = ind + "  "
             if (i < lines.size && lines[i].startsWith(attIndent)) {
                 val peek = lines[i].drop(attIndent.length)

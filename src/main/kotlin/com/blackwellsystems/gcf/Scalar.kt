@@ -10,9 +10,13 @@ fun needsQuote(s: String): Boolean {
     if (JSON_NUMBER_RE.matches(s)) return true
     if (NUMERIC_LIKE_RE.containsMatchIn(s)) return true
     if (s.first() == ' ' || s.last() == ' ') return true
-    if (s.first() == '#' || s.first() == '@') return true
+    if (s.first() == '#' || s.first() == '@' || s.first() == '.') return true
     for (c in s) {
-        if (c == '"' || c == '\\' || c == '|' || c == ',' || c.code < 0x20 || c == '\n' || c == '\r') return true
+        val code = c.code
+        if (c == '"' || c == '\\' || c == '|' || c == ',' || code < 0x20 || c == '\n' || c == '\r') return true
+        if (code in 0x80..0x9F) return true // C1 controls
+        if (code > 0x7F && code in setOf(0xA0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF)) return true
+        if (code in 0x2000..0x200A) return true // Unicode spaces
     }
     return false
 }
@@ -88,6 +92,7 @@ sealed class ScalarParsed {
     data class StringVal(val value: String) : ScalarParsed()
     data object Missing : ScalarParsed()
     data object Attachment : ScalarParsed()
+    data class InlineAttachment(val schema: String) : ScalarParsed()
 }
 
 fun parseScalarValue(s: String, tabularContext: Boolean = false): ScalarParsed {
@@ -98,9 +103,10 @@ fun parseScalarValue(s: String, tabularContext: Boolean = false): ScalarParsed {
         if (!tabularContext) throw IllegalArgumentException("invalid_missing: ~ outside tabular row cell")
         return ScalarParsed.Missing
     }
-    if (s == "^") {
+    if (s == "^" || (s.startsWith("^{") && s.endsWith("}"))) {
         if (!tabularContext) throw IllegalArgumentException("invalid_attachment_marker: ^ outside tabular row cell")
-        return ScalarParsed.Attachment
+        if (s == "^") return ScalarParsed.Attachment
+        return ScalarParsed.InlineAttachment(s.drop(1)) // e.g. "{name,email,tier}"
     }
     if (s == "true") return ScalarParsed.BoolVal(true)
     if (s == "false") return ScalarParsed.BoolVal(false)

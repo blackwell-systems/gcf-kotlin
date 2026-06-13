@@ -1,7 +1,7 @@
 package com.blackwellsystems.gcf
 
 /**
- * Encode any value into GCF v2.0 generic profile.
+ * Encode any value into GCF  generic profile.
  * Handles Map, List, String, Number, Boolean, and null.
  */
 @Suppress("UNCHECKED_CAST")
@@ -75,15 +75,83 @@ private fun tabularFields(arr: List<*>): List<String>? {
 }
 
 @Suppress("UNCHECKED_CAST")
+private fun inlineSchemaFields(arr: List<*>, fieldName: String): List<String>? {
+    if (arr.isEmpty()) return null
+    val first = arr[0] as? Map<*, *> ?: return null
+    if (fieldName !in first) return null
+    val firstVal = first[fieldName]
+    if (firstVal !is Map<*, *>) return null
+
+    var canonicalKeys: List<String>? = null
+    for (item in arr) {
+        val map = item as? Map<String, Any?> ?: return null
+        if (fieldName !in map || map[fieldName] == null) continue
+        val v = map[fieldName]
+        if (v !is Map<*, *>) return null
+        val keys = (v as Map<String, Any?>).keys.toList()
+        for (value in v.values) {
+            if (value is Map<*, *> || value is List<*>) return null
+        }
+        if (canonicalKeys == null) {
+            canonicalKeys = keys
+        } else {
+            if (keys != canonicalKeys) return null
+        }
+    }
+    return if (canonicalKeys != null && canonicalKeys.size >= 3) canonicalKeys else null
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun sharedArraySchema(arr: List<*>, fieldName: String): List<String>? {
+    if (arr.isEmpty()) return null
+    val first = arr[0] as? Map<*, *> ?: return null
+    if (fieldName !in first) return null
+    val firstVal = first[fieldName]
+    if (firstVal !is List<*>) return null
+
+    var canonicalFields: List<String>? = null
+    for (item in arr) {
+        val map = item as? Map<String, Any?> ?: return null
+        if (fieldName !in map || map[fieldName] == null) continue
+        val v = map[fieldName]
+        if (v !is List<*>) return null
+        val fields = tabularFields(v) ?: return null
+        // All values must be scalars.
+        for (arrItem in v) {
+            val arrMap = arrItem as? Map<*, *> ?: return null
+            for (value in arrMap.values) {
+                if (value is Map<*, *> || value is List<*>) return null
+            }
+        }
+        if (canonicalFields == null) {
+            canonicalFields = fields
+        } else {
+            if (fields != canonicalFields) return null
+        }
+    }
+    return canonicalFields
+}
+
+@Suppress("UNCHECKED_CAST")
 private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<String>, out: StringBuilder, depth: Int) {
     val prefix = indent(depth)
+
+    // Pre-compute inline schemas and shared array schemas.
+    val inlineSchemas = mutableMapOf<String, List<String>>()
+    val sharedArrSchemas = mutableMapOf<String, List<String>>()
+    for (f in fields) {
+        inlineSchemaFields(arr, f)?.let { inlineSchemas[f] = it }
+        sharedArraySchema(arr, f)?.let { sharedArrSchemas[f] = it }
+    }
+
     val fmtFields = fields.joinToString(",") { formatKeyValue(it) }
     out.append("$headerPrefix[${arr.size}]{$fmtFields}\n")
 
     for ((i, item) in arr.withIndex()) {
         val map = item as? Map<String, Any?> ?: continue
         val cells = mutableListOf<String>()
-        val attachments = mutableListOf<Pair<String, Any>>()
+        data class Att(val name: String, val value: Any, val inline: Boolean, val inlineFields: List<String>?)
+        val attachments = mutableListOf<Att>()
         var rowHasAttachment = false
 
         for (f in fields) {
@@ -91,8 +159,19 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
             val v = map[f]
             if (v == null) { cells.add("-"); continue }
             if (v is Map<*, *> || v is List<*>) {
-                cells.add("^")
-                attachments.add(f to v)
+                val ifs = inlineSchemas[f]
+                if (ifs != null && v is Map<*, *>) {
+                    if (i == 0) {
+                        val fmtIF = ifs.joinToString(",") { formatKeyValue(it) }
+                        cells.add("^{$fmtIF}")
+                    } else {
+                        cells.add("^")
+                    }
+                    attachments.add(Att(f, v, true, ifs))
+                } else {
+                    cells.add("^")
+                    attachments.add(Att(f, v, false, null))
+                }
                 rowHasAttachment = true
             } else {
                 cells.add(formatScalarValue(v, '|'))
@@ -102,17 +181,55 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
         val row = cells.joinToString("|")
         if (rowHasAttachment) out.append("${prefix}@$i $row\n") else out.append("$prefix$row\n")
 
-        for ((attName, attVal) in attachments) {
-            val attPrefix = "$prefix  "
-            val fk = formatKeyValue(attName)
-            when (attVal) {
-                is Map<*, *> -> {
-                    out.append("$attPrefix.$fk {}\n")
-                    encodeObject(attVal as Map<String, Any?>, out, depth + 2)
+        for (att in attachments) {
+            val fk = formatKeyValue(att.name)
+            if (att.inline && att.inlineFields != null) {
+                // Inline: single pipe-delimited row, no prefix.
+                val vals = att.inlineFields.joinToString("|") { inf ->
+                    val obj = att.value as Map<String, Any?>
+                    if (inf !in obj) "~" else formatScalarValue(obj[inf], '|')
                 }
-                is List<*> -> encodeAttachmentArray(attPrefix, fk, attVal, out, depth + 2)
+                out.append("$prefix$vals\n")
+            } else when (att.value) {
+                is Map<*, *> -> {
+                    out.append("$prefix.${fk} {}\n")
+                    encodeObject(att.value as Map<String, Any?>, out, depth + 2)
+                }
+                is List<*> -> {
+                    val sas = sharedArrSchemas[att.name]
+                    if (sas != null && i > 0) {
+                        encodeAttachmentArrayShared(prefix, fk, att.value, out, depth + 2, sas)
+                    } else {
+                        encodeAttachmentArray(prefix, fk, att.value, out, depth + 2)
+                    }
+                }
             }
         }
+    }
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun encodeAttachmentArrayShared(attPrefix: String, fk: String, arr: List<*>, out: StringBuilder, depth: Int, sharedFields: List<String>) {
+    if (arr.isEmpty()) { out.append("$attPrefix.$fk [0]\n"); return }
+    if (allPrimitives(arr)) {
+        val vals = arr.joinToString(",") { formatScalarValue(it, ',') }
+        out.append("$attPrefix.$fk [${arr.size}]: $vals\n"); return
+    }
+    val fields = tabularFields(arr)
+    if (fields != null && fields == sharedFields) {
+        val prefix = indent(depth)
+        out.append("$attPrefix.$fk [${arr.size}]\n")
+        for (item in arr) {
+            val map = item as? Map<String, Any?> ?: continue
+            val cells = sharedFields.map { f ->
+                if (f !in map) "~"
+                else if (map[f] == null) "-"
+                else formatScalarValue(map[f], '|')
+            }
+            out.append("$prefix${cells.joinToString("|")}\n")
+        }
+    } else {
+        encodeAttachmentArray(attPrefix, fk, arr, out, depth)
     }
 }
 
