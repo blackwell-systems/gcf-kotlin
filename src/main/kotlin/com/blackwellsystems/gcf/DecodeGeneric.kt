@@ -352,7 +352,6 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
             while (i < lines.size && attachmentValues.size < allAttFields.size) {
                 val aLine = lines[i]
                 val aContent: String? = when {
-                    aLine.startsWith(ind + "  ") -> aLine.drop(ind.length + 2)
                     depth == 0 || aLine.startsWith(ind) -> if (depth > 0) aLine.drop(ind.length) else aLine
                     else -> null
                 }
