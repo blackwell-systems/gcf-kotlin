@@ -17,9 +17,7 @@ fun decode(input: String): Payload {
     }
 
     val headerResult = parseHeader(header.substring(4))
-    if (headerResult.tool.isEmpty()) {
-        throw DecodeException("missing_tool: header missing required 'tool' field")
-    }
+    // v3.1: tool field is optional (SHOULD be present for MCP tool responses, not required).
 
     val symbols = mutableListOf<Symbol>()
     val symByID = mutableMapOf<Int, Symbol>()

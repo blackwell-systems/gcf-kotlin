@@ -13,7 +13,7 @@ fun needsQuote(s: String): Boolean {
     if (s.first() == '#' || s.first() == '@' || s.first() == '.') return true
     for (c in s) {
         val code = c.code
-        if (c == '"' || c == '\\' || c == '|' || code < 0x20 || c == '\n' || c == '\r') return true
+        if (c == '"' || c == '\\' || c == '|' || c == ',' || code < 0x20 || c == '\n' || c == '\r') return true
         if (code in 0x80..0x9F) return true // C1 controls
         if (code > 0x7F && code in setOf(0xA0, 0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF)) return true
         if (code in 0x2000..0x200A) return true // Unicode spaces

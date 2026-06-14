@@ -346,21 +346,55 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
         val allAttFields = traditionalAttFields + inlineAttFields
         val attachmentValues = linkedMapOf<String, Any?>()
 
+        // Check for orphan attachments when row has ID but no ^ cells.
+        if (rowHasID && allAttFields.isEmpty()) {
+            if (i < lines.size) {
+                val peekLine = lines[i]
+                var peekContent = ""
+                if (depth == 0 || peekLine.startsWith(ind)) {
+                    peekContent = if (depth > 0) peekLine.drop(ind.length) else peekLine
+                }
+                // Handle v2 indented attachments.
+                if (!peekContent.startsWith(".") && peekContent.startsWith("  .")) {
+                    peekContent = peekContent.drop(2)
+                }
+                if (peekContent.startsWith(".")) {
+                    val (orphanName, _) = parseAttachmentName(peekContent.drop(1))
+                    throw IllegalArgumentException("orphan_attachment: .$orphanName without matching ^ cell")
+                }
+            }
+        }
+
         if (rowHasID && allAttFields.isNotEmpty()) {
+            val resolvedAttachments = mutableSetOf<String>()
             var inlineIdx = 0
 
             while (i < lines.size && attachmentValues.size < allAttFields.size) {
                 val aLine = lines[i]
-                val aContent: String? = when {
+                var aContent: String? = when {
                     depth == 0 || aLine.startsWith(ind) -> if (depth > 0) aLine.drop(ind.length) else aLine
                     else -> null
                 }
                 if (aContent == null) break
 
-                if (aContent.startsWith(".")) {
+                // Handle v2 indented attachments: strip one extra indent level.
+                if (aContent != null && !aContent.startsWith(".") && aContent.startsWith("  .")) {
+                    aContent = aContent.drop(2)
+                }
+
+                if (aContent!!.startsWith(".")) {
                     val rest = aContent.drop(1)
                     val (attName, afterNameR) = parseAttachmentName(rest)
                     val afterNameS = afterNameR.trimStart()
+
+                    // Check orphan: attachment for field not in allAttFields.
+                    if (attName !in allAttFields) {
+                        throw IllegalArgumentException("orphan_attachment: $attName without matching ^ cell")
+                    }
+                    // Check duplicate.
+                    if (attName in resolvedAttachments) {
+                        throw IllegalArgumentException("duplicate_attachment: $attName")
+                    }
 
                     val ifs = inlineSchemas[attName]
                     if (ifs != null && !afterNameS.startsWith("{}") && !afterNameS.startsWith("[")) {
@@ -372,6 +406,7 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
                             if (p !is ScalarParsed.Missing) obj[inf] = scalarToAny(p)
                         }
                         attachmentValues[attName] = obj
+                        resolvedAttachments.add(attName)
                         i++; continue
                     }
 
@@ -380,6 +415,7 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
                         sharedArraySchemas[result.name] = result.parsedFields
                     }
                     attachmentValues[result.name] = result.value
+                    resolvedAttachments.add(result.name)
                     i += result.consumed; continue
                 }
 
@@ -403,6 +439,25 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
                 }
                 attachmentValues[nextInlineField] = obj
                 inlineIdx++; i++
+            }
+
+            // Check for extra attachment lines after all fields resolved (duplicate).
+            if (i < lines.size) {
+                val extraLine = lines[i]
+                var extraContent = ""
+                if (depth == 0 || extraLine.startsWith(ind)) {
+                    extraContent = if (depth > 0) extraLine.drop(ind.length) else extraLine
+                }
+                // Handle v2 indented attachments.
+                if (!extraContent.startsWith(".") && extraContent.startsWith("  .")) {
+                    extraContent = extraContent.drop(2)
+                }
+                if (extraContent.startsWith(".")) {
+                    val (extraName, _) = parseAttachmentName(extraContent.drop(1))
+                    if (extraName in resolvedAttachments) {
+                        throw IllegalArgumentException("duplicate_attachment: $extraName")
+                    }
+                }
             }
 
             for (f in allAttFields) {

@@ -149,9 +149,10 @@ class GcfTest {
     }
 
     @Test
-    fun `decode rejects missing tool`() {
-        val ex = assertThrows<DecodeException> { decode("GCF budget=100 tokens=50 symbols=0") }
-        assertContains(ex.message!!, "missing required 'tool' field")
+    fun `decode accepts missing tool`() {
+        // v3.1: tool field is optional.
+        val result = decode("GCF profile=graph budget=100 tokens=50 symbols=0")
+        assertEquals("", result.tool)
     }
 
     @Test
