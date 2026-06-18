@@ -110,6 +110,17 @@ private fun parseObjectBody(lines: List<String>, start: Int, depth: Int, out: Li
             i += consumed; continue
         }
 
+        // Key=value. Check before inline array so bracket patterns in quoted
+        // values (e.g. text="ERR[404]: Not Found") are not misinterpreted.
+        val eqIdx = findKVSplit(content)
+        if (eqIdx != null && eqIdx > 0) {
+            val name = parseKeyFromHeader(content.substring(0, eqIdx))
+            checkDup(out, name)
+            out[name] = scalarToAny(parseScalarValue(content.substring(eqIdx + 1)))
+            i++; continue
+        }
+
+        // Inline array (e.g. items[3]: a,b,c). Only reached if no = found.
         if (!content.startsWith("@") && !content.startsWith("##")) {
             val bracketIdx = content.indexOf('[')
             if (bracketIdx > 0) {
@@ -127,14 +138,6 @@ private fun parseObjectBody(lines: List<String>, start: Int, depth: Int, out: Li
                 }
             }
         }
-
-        val eqIdx = findKVSplit(content)
-        if (eqIdx != null && eqIdx > 0) {
-            val name = parseKeyFromHeader(content.substring(0, eqIdx))
-            checkDup(out, name)
-            out[name] = scalarToAny(parseScalarValue(content.substring(eqIdx + 1)))
-            i++; continue
-        }
         i++
     }
     return i - start
@@ -151,8 +154,11 @@ private fun findKVSplit(s: String): Int? {
         }
         return null
     }
-    val idx = s.indexOf('=')
-    return if (idx >= 0) idx else null
+    val eqIdx = s.indexOf('=')
+    if (eqIdx < 0) return null
+    val bracketIdx = s.indexOf('[')
+    if (bracketIdx in 0 until eqIdx) return null
+    return eqIdx
 }
 
 private fun parseKeyFromHeader(s: String): String {

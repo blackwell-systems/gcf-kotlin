@@ -3,6 +3,7 @@ package com.blackwellsystems.gcf
 private val JSON_NUMBER_RE = Regex("^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$")
 private val NUMERIC_LIKE_RE = Regex("^[+-]\\.?\\d|^\\.\\d|^0\\d")
 private val BARE_KEY_RE = Regex("^[a-zA-Z_][a-zA-Z0-9_]*$")
+private val INLINE_ARRAY_RE = Regex("""\[[^\]]*\]\s*:""")
 
 fun needsQuote(s: String): Boolean {
     if (s.isEmpty()) return true
@@ -11,6 +12,7 @@ fun needsQuote(s: String): Boolean {
     if (NUMERIC_LIKE_RE.containsMatchIn(s)) return true
     if (s.first() == ' ' || s.last() == ' ') return true
     if (s.first() == '#' || s.first() == '@' || s.first() == '.') return true
+    if (INLINE_ARRAY_RE.containsMatchIn(s)) return true
     for (c in s) {
         val code = c.code
         if (c == '"' || c == '\\' || c == '|' || c == ',' || code < 0x20 || c == '\n' || c == '\r') return true
