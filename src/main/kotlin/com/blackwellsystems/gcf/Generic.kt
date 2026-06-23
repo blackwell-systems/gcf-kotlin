@@ -132,20 +132,136 @@ private fun sharedArraySchema(arr: List<*>, fieldName: String): List<String>? {
     return canonicalFields
 }
 
+// -- Nested object flattening (v3.2) --
+
+private data class FlatLeaf(val path: String, val keys: List<String>)
+
+@Suppress("UNCHECKED_CAST")
+private fun analyzeFlattenable(arr: List<*>, fieldName: String, parentPath: String): List<FlatLeaf>? {
+    var canonicalShape: MutableMap<String, String>? = null // key -> "scalar" | "nested"
+    var canonicalKeys: List<String>? = null
+
+    for (item in arr) {
+        val map = item as? Map<String, Any?> ?: return null
+        if (fieldName !in map || map[fieldName] == null) continue
+        val v = map[fieldName]
+        if (v !is Map<*, *>) return null
+        if (v is List<*>) return null
+        val obj = v as Map<String, Any?>
+        val keys = obj.keys.toList()
+
+        if (canonicalShape == null) {
+            val shape = mutableMapOf<String, String>()
+            for (k in keys) {
+                if (">" in k) return null
+                val value = obj[k]
+                when {
+                    value is List<*> -> return null
+                    value is Map<*, *> -> shape[k] = "nested"
+                    else -> shape[k] = "scalar"
+                }
+            }
+            canonicalShape = shape
+            canonicalKeys = keys
+        } else {
+            if (keys != canonicalKeys) return null
+            for (k in keys) {
+                val expected = canonicalShape[k] ?: return null
+                val value = obj[k]
+                if (expected == "scalar" && (value is Map<*, *> || value is List<*>)) return null
+                if (expected == "nested" && value is List<*>) return null
+                if (expected == "nested" && value != null && value !is Map<*, *>) return null
+            }
+        }
+    }
+
+    val shape = canonicalShape ?: return null
+    val ck = canonicalKeys ?: return null
+    val currentPath = if (parentPath.isEmpty()) fieldName else "$parentPath>$fieldName"
+    val parentKeys = if (parentPath.isEmpty()) listOf(fieldName) else parentPath.split(">") + fieldName
+
+    val leaves = mutableListOf<FlatLeaf>()
+    for (k in ck) {
+        if (shape[k] == "scalar") {
+            leaves.add(FlatLeaf("$currentPath>$k", parentKeys + k))
+        } else {
+            val subArr = arr.map { item ->
+                val map = item as? Map<String, Any?>
+                if (map == null || fieldName !in map || map[fieldName] == null) emptyMap<String, Any?>()
+                else map[fieldName] as Any
+            }
+            val subLeaves = analyzeFlattenable(subArr, k, currentPath) ?: return null
+            if (subLeaves.isEmpty()) return null
+            leaves.addAll(subLeaves)
+        }
+    }
+
+    // Guard: reject if any row has non-null object with all-null leaves.
+    if (leaves.isNotEmpty()) {
+        for (item in arr) {
+            val map = item as? Map<String, Any?> ?: continue
+            if (fieldName !in map || map[fieldName] == null) continue
+            val allNull = leaves.all { leaf ->
+                val (value, exists) = resolveKeyChainKt(item, leaf.keys)
+                exists && value == null
+            }
+            if (allNull) return null
+        }
+    }
+
+    return leaves
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun resolveKeyChainKt(item: Any?, keys: List<String>): Pair<Any?, Boolean> {
+    if (keys.isEmpty() || item !is Map<*, *>) return Pair(null, false)
+    val map = item as Map<String, Any?>
+    if (keys[0] !in map) return Pair(null, false)
+    var current: Any? = map[keys[0]]
+    if (current == null) return Pair(null, true)
+    for (k in keys.drop(1)) {
+        if (current !is Map<*, *>) return Pair(null, false)
+        val m = current as Map<String, Any?>
+        if (k !in m) return Pair(null, false)
+        current = m[k]
+    }
+    return Pair(current, true)
+}
+
+private data class FlatCol(val header: String, val type: String, val field: String, val keys: List<String>)
+
 @Suppress("UNCHECKED_CAST")
 private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<String>, out: StringBuilder, depth: Int) {
     val prefix = indent(depth)
 
-    // Pre-compute inline schemas and shared array schemas.
+    // Phase 0: Analyze fields for flattening.
+    val flattenMap = mutableMapOf<String, List<FlatLeaf>>()
+    for (f in fields) {
+        analyzeFlattenable(arr, f, "")?.takeIf { it.isNotEmpty() }?.let { flattenMap[f] = it }
+    }
+
+    // Build expanded column list.
+    val columns = mutableListOf<FlatCol>()
+    for (f in fields) {
+        val leaves = flattenMap[f]
+        if (leaves != null) {
+            for (leaf in leaves) columns.add(FlatCol(formatKeyValue(leaf.path), "flat", f, leaf.keys))
+        } else {
+            columns.add(FlatCol(formatKeyValue(f), "original", f, emptyList()))
+        }
+    }
+
+    // Pre-compute inline schemas and shared array schemas (skip flattened).
     val inlineSchemas = mutableMapOf<String, List<String>>()
     val sharedArrSchemas = mutableMapOf<String, List<String>>()
     for (f in fields) {
+        if (f in flattenMap) continue
         inlineSchemaFields(arr, f)?.let { inlineSchemas[f] = it }
         sharedArraySchema(arr, f)?.let { sharedArrSchemas[f] = it }
     }
 
-    val fmtFields = fields.joinToString(",") { formatKeyValue(it) }
-    out.append("$headerPrefix[${arr.size}]{$fmtFields}\n")
+    val headerFields = columns.joinToString(",") { it.header }
+    out.append("$headerPrefix[${arr.size}]{$headerFields}\n")
 
     for ((i, item) in arr.withIndex()) {
         val map = item as? Map<String, Any?> ?: continue
@@ -154,7 +270,21 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
         val attachments = mutableListOf<Att>()
         var rowHasAttachment = false
 
-        for (f in fields) {
+        for (col in columns) {
+            if (col.type == "flat") {
+                if (col.keys[0] !in map) { cells.add("~"); continue }
+                val topVal = map[col.keys[0]]
+                if (topVal == null) { cells.add("-"); continue }
+                val (value, exists) = resolveKeyChainKt(item, col.keys)
+                when {
+                    !exists -> cells.add("~")
+                    value == null -> cells.add("-")
+                    else -> cells.add(formatScalarValue(value, '|'))
+                }
+                continue
+            }
+
+            val f = col.field
             if (f !in map) { cells.add("~"); continue }
             val v = map[f]
             if (v == null) { cells.add("-"); continue }

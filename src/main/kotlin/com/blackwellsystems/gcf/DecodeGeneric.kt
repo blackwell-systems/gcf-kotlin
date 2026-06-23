@@ -292,6 +292,12 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
     val inlineSchemas = mutableMapOf<String, List<String>>()
     val sharedArraySchemas = mutableMapOf<String, List<String>>()
 
+    // Detect path columns: fields containing ">".
+    val pathColumnMap = mutableMapOf<String, List<String>>()
+    for (f in fields) {
+        if (">" in f) pathColumnMap[f] = f.split(">")
+    }
+
     while (i < lines.size) {
         val line = lines[i]
         val content = if (depth > 0) { if (!line.startsWith(ind)) break; line.drop(ind.length) } else line
@@ -323,8 +329,22 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
         val inlineAttOrder = mutableListOf<String>()
         val missingFields = mutableSetOf<String>()
 
+        // Collect path column values for unflattening.
+        val flatValues = mutableMapOf<String, Any?>()
+        val flatAbsent = mutableSetOf<String>()
+
         for ((j, f) in fields.withIndex()) {
             val cellVal = vals[j]
+
+            // Path columns: store values for later unflattening.
+            if (f in pathColumnMap) {
+                when (val parsed = parseScalarValue(cellVal, tabularContext = true)) {
+                    is ScalarParsed.Missing -> flatAbsent.add(f)
+                    else -> flatValues[f] = scalarToAny(parsed)
+                }
+                continue
+            }
+
             if (cellVal.startsWith("^{") && cellVal.endsWith("}")) {
                 val ifs = splitFieldDeclValue(cellVal.drop(1))
                 inlineSchemas[f] = ifs
@@ -485,11 +505,58 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
             if (f in cellValues) { row[f] = cellValues[f]; continue }
             if (f in attachmentValues) { row[f] = attachmentValues[f]; continue }
         }
+        // Unflatten path columns into nested objects.
+        if (pathColumnMap.isNotEmpty()) {
+            val nested = unflattenPathsKt(pathColumnMap, flatValues, flatAbsent)
+            row.putAll(nested)
+        }
+
         rows.add(row)
 
         if (expectedCount >= 0 && rows.size >= expectedCount) break
     }
     return rows to (i - start)
+}
+
+private fun unflattenPathsKt(
+    pathColumns: Map<String, List<String>>,
+    flatValues: Map<String, Any?>,
+    flatAbsent: Set<String>
+): LinkedHashMap<String, Any?> {
+    val groups = linkedMapOf<String, MutableList<String>>()
+    for ((fieldName, paths) in pathColumns) {
+        if (paths.isEmpty()) continue
+        val top = paths[0]
+        groups.getOrPut(top) { mutableListOf() }.add(fieldName)
+    }
+
+    val result = linkedMapOf<String, Any?>()
+
+    for ((top, fieldNames) in groups) {
+        val allAbsent = fieldNames.all { it in flatAbsent }
+        val allNull = fieldNames.all { f ->
+            if (f in flatAbsent) false
+            else flatValues[f] == null
+        }
+
+        if (allAbsent) continue
+        if (allNull) { result[top] = null; continue }
+
+        for (fieldName in fieldNames) {
+            if (fieldName in flatAbsent) continue
+            val paths = pathColumns[fieldName] ?: continue
+            val value = flatValues[fieldName]
+
+            var current: LinkedHashMap<String, Any?> = result
+            for (k in paths.dropLast(1)) {
+                @Suppress("UNCHECKED_CAST")
+                current = current.getOrPut(k) { linkedMapOf<String, Any?>() } as LinkedHashMap<String, Any?>
+            }
+            current[paths.last()] = value
+        }
+    }
+
+    return result
 }
 
 private fun parseAttachment(lines: List<String>, lineIdx: Int, rest: String, depth: Int): Triple<String, Any?, Int> {
