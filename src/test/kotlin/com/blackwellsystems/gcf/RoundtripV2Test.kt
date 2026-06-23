@@ -15,10 +15,12 @@ class RoundtripV2Test {
         val rng = Random(42)
         for (i in 0 until iterations) {
             val v = genValue(rng, 0, 4)
-            val gcf = encodeGeneric(v)
-            val decoded = decodeGeneric(gcf)
-            assertTrue(structuralEqual(v, decoded),
-                "iteration $i: mismatch\n  input: $v\n  decoded: $decoded\n  gcf: $gcf")
+            for (noFlatten in listOf(false, true)) {
+                val gcf = encodeGeneric(v, GenericOptions(noFlatten = noFlatten))
+                val decoded = decodeGeneric(gcf)
+                assertTrue(structuralEqual(v, decoded),
+                    "iteration $i noFlatten=$noFlatten: mismatch\n  input: $v\n  decoded: $decoded\n  gcf: $gcf")
+            }
         }
     }
 
@@ -30,10 +32,12 @@ class RoundtripV2Test {
         for (i in 0 until iterations) {
             val v = if (rng.nextFloat() < 0.3) collisions[rng.nextInt(collisions.size)]
                     else genValue(rng, 0, 3)
-            val gcf = encodeGeneric(v)
-            val decoded = decodeGeneric(gcf)
-            assertTrue(structuralEqual(v, decoded),
-                "iteration $i: mismatch\n  input: $v\n  decoded: $decoded\n  gcf: $gcf")
+            for (noFlatten in listOf(false, true)) {
+                val gcf = encodeGeneric(v, GenericOptions(noFlatten = noFlatten))
+                val decoded = decodeGeneric(gcf)
+                assertTrue(structuralEqual(v, decoded),
+                    "iteration $i noFlatten=$noFlatten: mismatch\n  input: $v\n  decoded: $decoded\n  gcf: $gcf")
+            }
         }
     }
 
@@ -67,7 +71,7 @@ class RoundtripV2Test {
     }
 
     private val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-    private val special = " |,=\"\\#@\n\t~^+-."
+    private val special = " |,=\"\\#@\n\t~^+-.>"
 
     private fun genString(rng: Random): String {
         val n = rng.nextInt(20)
