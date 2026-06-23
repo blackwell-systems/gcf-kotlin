@@ -6,8 +6,8 @@ package com.blackwellsystems.gcf
 data class GenericOptions(
     /** When true, disables promotion of fixed-shape nested objects to path
      *  columns (e.g. "customer>name"). Nested objects use attachment syntax
-     *  instead. Set when targeting open-weight models that show lower
-     *  comprehension on flattened encoding. */
+     *  instead. Open-weight models currently comprehend the expanded form
+     *  better; this gap is expected to close. */
     val noFlatten: Boolean = false
 )
 
