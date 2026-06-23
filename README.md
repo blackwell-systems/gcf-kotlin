@@ -24,7 +24,7 @@ repositories {
 }
 
 dependencies {
-    implementation("com.github.blackwell-systems:gcf-kotlin:v0.5.0")
+    implementation("com.github.blackwell-systems:gcf-kotlin:v2.2.1")
 }
 ```
 
@@ -36,7 +36,7 @@ repositories {
 }
 
 dependencies {
-    implementation 'com.github.blackwell-systems:gcf-kotlin:v0.5.0'
+    implementation 'com.github.blackwell-systems:gcf-kotlin:v2.2.1'
 }
 ```
 
@@ -53,7 +53,7 @@ dependencies {
 <dependency>
     <groupId>com.github.blackwell-systems</groupId>
     <artifactId>gcf-kotlin</artifactId>
-    <version>v0.5.0</version>
+    <version>v2.2.1</version>
 </dependency>
 ```
 
@@ -239,7 +239,7 @@ GCF wins 15/16 datasets on the expanded [token efficiency benchmark](https://git
 
 **Zero runtime dependencies. Permanently.** All six implementations depend only on their language's standard library. No transitive dependencies. No supply chain risk. This is a permanent commitment: GCF will never take on external runtime dependencies. MIT licensed. All implementations support both generic profile (`encodeGeneric`) and graph profile (`encode`). CLI included in all 6 languages.
 
-**Specification:** [SPEC v3.2 Stable](https://github.com/blackwell-systems/gcf/blob/main/SPEC.md) with 173 conformance fixtures, 43,000,000,000+ lossless round-trips verified across 5 formats and 6 languages. All implementations at v2.2.0+ (Go v1.3.0). Cross-language 6x6 matrix verified.
+**Specification:** [SPEC v3.2 Stable](https://github.com/blackwell-systems/gcf/blob/main/SPEC.md) with 174 conformance fixtures, 43,000,000,000+ lossless round-trips verified across 5 formats and 6 languages. All implementations at v2.2.1+ (Go v1.3.1). Cross-language 6x6 matrix verified.
 
 ## License
 
