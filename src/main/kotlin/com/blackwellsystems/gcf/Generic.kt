@@ -1,53 +1,64 @@
 package com.blackwellsystems.gcf
 
 /**
- * Encode any value into GCF  generic profile.
+ * Options for controlling generic encoding behavior.
+ */
+data class GenericOptions(
+    /** When true, disables promotion of fixed-shape nested objects to path
+     *  columns (e.g. "customer>name"). Nested objects use attachment syntax
+     *  instead. Set when targeting open-weight models that show lower
+     *  comprehension on flattened encoding. */
+    val noFlatten: Boolean = false
+)
+
+/**
+ * Encode any value into GCF generic profile.
  * Handles Map, List, String, Number, Boolean, and null.
  */
 @Suppress("UNCHECKED_CAST")
-fun encodeGeneric(data: Any?): String {
+fun encodeGeneric(data: Any?, opts: GenericOptions = GenericOptions()): String {
     val out = StringBuilder("GCF profile=generic\n")
-    encodeRootValue(data, out)
+    encodeRootValue(data, out, opts)
     return out.toString()
 }
 
-private fun encodeRootValue(v: Any?, out: StringBuilder) {
+private fun encodeRootValue(v: Any?, out: StringBuilder, opts: GenericOptions) {
     when {
         v == null -> out.append("=-\n")
-        v is Map<*, *> -> encodeObject(v as Map<String, Any?>, out, 0)
-        v is List<*> -> encodeRootArray(v, out)
+        v is Map<*, *> -> encodeObject(v as Map<String, Any?>, out, 0, opts)
+        v is List<*> -> encodeRootArray(v, out, opts)
         else -> { out.append("="); out.append(formatScalarValue(v)); out.append("\n") }
     }
 }
 
 @Suppress("UNCHECKED_CAST")
-private fun encodeObject(map: Map<String, Any?>, out: StringBuilder, depth: Int) {
+private fun encodeObject(map: Map<String, Any?>, out: StringBuilder, depth: Int, opts: GenericOptions) {
     val prefix = indent(depth)
     for ((key, value) in map) {
         val fk = formatKeyValue(key)
         when {
             value is Map<*, *> -> {
                 out.append("${prefix}## $fk\n")
-                encodeObject(value as Map<String, Any?>, out, depth + 1)
+                encodeObject(value as Map<String, Any?>, out, depth + 1, opts)
             }
-            value is List<*> -> encodeNamedArray(fk, value, out, depth)
+            value is List<*> -> encodeNamedArray(fk, value, out, depth, opts)
             else -> out.append("$prefix$fk=${formatScalarValue(value)}\n")
         }
     }
 }
 
-private fun encodeRootArray(arr: List<*>, out: StringBuilder) {
+private fun encodeRootArray(arr: List<*>, out: StringBuilder, opts: GenericOptions) {
     if (arr.isEmpty()) { out.append("## [0]\n"); return }
     if (allPrimitives(arr)) {
         val vals = arr.joinToString(",") { formatScalarValue(it, ',') }
         out.append("## [${arr.size}]: $vals\n"); return
     }
     val fields = tabularFields(arr)
-    if (fields != null) { encodeTabular("## ", arr, fields, out, 0); return }
-    encodeExpanded("## ", arr, out, 0)
+    if (fields != null) { encodeTabular("## ", arr, fields, out, 0, opts); return }
+    encodeExpanded("## ", arr, out, 0, opts)
 }
 
-private fun encodeNamedArray(name: String, arr: List<*>, out: StringBuilder, depth: Int) {
+private fun encodeNamedArray(name: String, arr: List<*>, out: StringBuilder, depth: Int, opts: GenericOptions) {
     val prefix = indent(depth)
     if (arr.isEmpty()) { out.append("${prefix}## $name [0]\n"); return }
     if (allPrimitives(arr)) {
@@ -55,8 +66,8 @@ private fun encodeNamedArray(name: String, arr: List<*>, out: StringBuilder, dep
         out.append("$prefix${name}[${arr.size}]: $vals\n"); return
     }
     val fields = tabularFields(arr)
-    if (fields != null) { encodeTabular("${prefix}## $name ", arr, fields, out, depth); return }
-    encodeExpanded("${prefix}## $name ", arr, out, depth)
+    if (fields != null) { encodeTabular("${prefix}## $name ", arr, fields, out, depth, opts); return }
+    encodeExpanded("${prefix}## $name ", arr, out, depth, opts)
 }
 
 @Suppress("UNCHECKED_CAST")
@@ -138,6 +149,8 @@ private data class FlatLeaf(val path: String, val keys: List<String>)
 
 @Suppress("UNCHECKED_CAST")
 private fun analyzeFlattenable(arr: List<*>, fieldName: String, parentPath: String): List<FlatLeaf>? {
+    // Field names containing ">" cannot be flattened (would create ambiguous paths).
+    if (">" in fieldName) return null
     var canonicalShape: MutableMap<String, String>? = null // key -> "scalar" | "nested"
     var canonicalKeys: List<String>? = null
 
@@ -231,24 +244,37 @@ private fun resolveKeyChainKt(item: Any?, keys: List<String>): Pair<Any?, Boolea
 private data class FlatCol(val header: String, val type: String, val field: String, val keys: List<String>)
 
 @Suppress("UNCHECKED_CAST")
-private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<String>, out: StringBuilder, depth: Int) {
+private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<String>, out: StringBuilder, depth: Int, opts: GenericOptions = GenericOptions()) {
     val prefix = indent(depth)
 
     // Phase 0: Analyze fields for flattening.
     val flattenMap = mutableMapOf<String, List<FlatLeaf>>()
-    for (f in fields) {
-        analyzeFlattenable(arr, f, "")?.takeIf { it.isNotEmpty() }?.let { flattenMap[f] = it }
+    if (!opts.noFlatten) {
+        for (f in fields) {
+            analyzeFlattenable(arr, f, "")?.takeIf { it.isNotEmpty() }?.let { flattenMap[f] = it }
+        }
     }
+
+    // Fields whose names contain ">" must not appear as tabular columns
+    // because the decoder would interpret them as flattened path columns.
+    val gtFields = fields.filter { it !in flattenMap && ">" in it }.toSet()
 
     // Build expanded column list.
     val columns = mutableListOf<FlatCol>()
     for (f in fields) {
+        if (f in gtFields) continue
         val leaves = flattenMap[f]
         if (leaves != null) {
             for (leaf in leaves) columns.add(FlatCol(formatKeyValue(leaf.path), "flat", f, leaf.keys))
         } else {
             columns.add(FlatCol(formatKeyValue(f), "original", f, emptyList()))
         }
+    }
+
+    // If all fields were excluded (all contain ">"), fall back to expanded.
+    if (columns.isEmpty()) {
+        encodeExpanded(headerPrefix, arr, out, depth, opts)
+        return
     }
 
     // Pre-compute inline schemas and shared array schemas (skip flattened).
@@ -266,7 +292,7 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
     for ((i, item) in arr.withIndex()) {
         val map = item as? Map<String, Any?> ?: continue
         val cells = mutableListOf<String>()
-        data class Att(val name: String, val value: Any, val inline: Boolean, val inlineFields: List<String>?)
+        data class Att(val name: String, val value: Any?, val inline: Boolean, val inlineFields: List<String>?)
         val attachments = mutableListOf<Att>()
         var rowHasAttachment = false
 
@@ -308,6 +334,14 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
             }
         }
 
+        // Emit fields with ">" in their names as per-row attachments.
+        for (f in fields) {
+            if (f !in gtFields) continue
+            if (f !in map) continue
+            rowHasAttachment = true
+            attachments.add(Att(f, map[f], false, null))
+        }
+
         val row = cells.joinToString("|")
         if (rowHasAttachment) out.append("${prefix}@$i $row\n") else out.append("$prefix$row\n")
 
@@ -323,15 +357,19 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
             } else when (att.value) {
                 is Map<*, *> -> {
                     out.append("$prefix.${fk} {}\n")
-                    encodeObject(att.value as Map<String, Any?>, out, depth + 2)
+                    encodeObject(att.value as Map<String, Any?>, out, depth + 2, opts)
                 }
                 is List<*> -> {
                     val sas = sharedArrSchemas[att.name]
                     if (sas != null && i > 0) {
-                        encodeAttachmentArrayShared(prefix, fk, att.value, out, depth + 2, sas)
+                        encodeAttachmentArrayShared(prefix, fk, att.value, out, depth + 2, sas, opts)
                     } else {
-                        encodeAttachmentArray(prefix, fk, att.value, out, depth + 2)
+                        encodeAttachmentArray(prefix, fk, att.value, out, depth + 2, opts)
                     }
+                }
+                else -> {
+                    // Scalar attachment (e.g. field names containing ">").
+                    out.append("$prefix.$fk =${formatScalarValue(att.value)}\n")
                 }
             }
         }
@@ -339,7 +377,7 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
 }
 
 @Suppress("UNCHECKED_CAST")
-private fun encodeAttachmentArrayShared(attPrefix: String, fk: String, arr: List<*>, out: StringBuilder, depth: Int, sharedFields: List<String>) {
+private fun encodeAttachmentArrayShared(attPrefix: String, fk: String, arr: List<*>, out: StringBuilder, depth: Int, sharedFields: List<String>, opts: GenericOptions = GenericOptions()) {
     if (arr.isEmpty()) { out.append("$attPrefix.$fk [0]\n"); return }
     if (allPrimitives(arr)) {
         val vals = arr.joinToString(",") { formatScalarValue(it, ',') }
@@ -359,46 +397,46 @@ private fun encodeAttachmentArrayShared(attPrefix: String, fk: String, arr: List
             out.append("$prefix${cells.joinToString("|")}\n")
         }
     } else {
-        encodeAttachmentArray(attPrefix, fk, arr, out, depth)
+        encodeAttachmentArray(attPrefix, fk, arr, out, depth, opts)
     }
 }
 
-private fun encodeAttachmentArray(attPrefix: String, fk: String, arr: List<*>, out: StringBuilder, depth: Int) {
+private fun encodeAttachmentArray(attPrefix: String, fk: String, arr: List<*>, out: StringBuilder, depth: Int, opts: GenericOptions = GenericOptions()) {
     if (arr.isEmpty()) { out.append("$attPrefix.$fk [0]\n"); return }
     if (allPrimitives(arr)) {
         val vals = arr.joinToString(",") { formatScalarValue(it, ',') }
         out.append("$attPrefix.$fk [${arr.size}]: $vals\n"); return
     }
     val fields = tabularFields(arr)
-    if (fields != null) { encodeTabular("$attPrefix.$fk ", arr, fields, out, depth); return }
-    encodeExpanded("$attPrefix.$fk ", arr, out, depth)
+    if (fields != null) { encodeTabular("$attPrefix.$fk ", arr, fields, out, depth, opts); return }
+    encodeExpanded("$attPrefix.$fk ", arr, out, depth, opts)
 }
 
 @Suppress("UNCHECKED_CAST")
-private fun encodeExpanded(headerPrefix: String, arr: List<*>, out: StringBuilder, depth: Int) {
+private fun encodeExpanded(headerPrefix: String, arr: List<*>, out: StringBuilder, depth: Int, opts: GenericOptions = GenericOptions()) {
     val prefix = indent(depth)
     out.append("$headerPrefix[${arr.size}]\n")
     for ((i, item) in arr.withIndex()) {
         when {
             item is Map<*, *> -> {
                 out.append("${prefix}@$i {}\n")
-                encodeObject(item as Map<String, Any?>, out, depth + 1)
+                encodeObject(item as Map<String, Any?>, out, depth + 1, opts)
             }
-            item is List<*> -> encodeExpandedArrayItem(prefix, i, item, out, depth)
+            item is List<*> -> encodeExpandedArrayItem(prefix, i, item, out, depth, opts)
             else -> out.append("${prefix}@$i =${formatScalarValue(item)}\n")
         }
     }
 }
 
-private fun encodeExpandedArrayItem(prefix: String, idx: Int, arr: List<*>, out: StringBuilder, depth: Int) {
+private fun encodeExpandedArrayItem(prefix: String, idx: Int, arr: List<*>, out: StringBuilder, depth: Int, opts: GenericOptions = GenericOptions()) {
     if (arr.isEmpty()) { out.append("${prefix}@$idx [0]\n"); return }
     if (allPrimitives(arr)) {
         val vals = arr.joinToString(",") { formatScalarValue(it, ',') }
         out.append("${prefix}@$idx [${arr.size}]: $vals\n"); return
     }
     val fields = tabularFields(arr)
-    if (fields != null) { encodeTabular("${prefix}@$idx ", arr, fields, out, depth + 1); return }
-    encodeExpanded("${prefix}@$idx ", arr, out, depth + 1)
+    if (fields != null) { encodeTabular("${prefix}@$idx ", arr, fields, out, depth + 1, opts); return }
+    encodeExpanded("${prefix}@$idx ", arr, out, depth + 1, opts)
 }
 
 private fun allPrimitives(arr: List<*>): Boolean = arr.all { it !is Map<*, *> && it !is List<*> }

@@ -280,6 +280,15 @@ private fun parseAttachment(lines: List<String>, lineIdx: Int, rest: String, dep
         val (arr, consumed) = parseArrayFromHeader(lines, lineIdx, depth, afterName)
         return AttachmentResult(name, arr, consumed, null)
     }
+    // Scalar: =value (field names containing ">" excluded from tabular columns).
+    if (afterName.startsWith("=")) {
+        val valStr = afterName.drop(1)
+        val parsed = parseScalarValue(valStr, tabularContext = true)
+        return when (parsed) {
+            is ScalarParsed.Missing -> AttachmentResult(name, null, 1, null)
+            else -> AttachmentResult(name, scalarToAny(parsed), 1, null)
+        }
+    }
     throw IllegalArgumentException("invalid attachment form: $afterName")
 }
 
@@ -295,7 +304,13 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
     // Detect path columns: fields containing ">".
     val pathColumnMap = mutableMapOf<String, List<String>>()
     for (f in fields) {
-        if (">" in f) pathColumnMap[f] = f.split(">")
+        if (">" in f) {
+            val parts = f.split(">")
+            // Only treat as a path column if all segments are non-empty.
+            if (parts.all { it.isNotEmpty() }) {
+                pathColumnMap[f] = parts
+            }
+        }
     }
 
     while (i < lines.size) {
@@ -372,30 +387,11 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
         val allAttFields = traditionalAttFields + inlineAttFields
         val attachmentValues = linkedMapOf<String, Any?>()
 
-        // Check for orphan attachments when row has ID but no ^ cells.
-        if (rowHasID && allAttFields.isEmpty()) {
-            if (i < lines.size) {
-                val peekLine = lines[i]
-                var peekContent = ""
-                if (depth == 0 || peekLine.startsWith(ind)) {
-                    peekContent = if (depth > 0) peekLine.drop(ind.length) else peekLine
-                }
-                // Handle v2 indented attachments.
-                if (!peekContent.startsWith(".") && peekContent.startsWith("  .")) {
-                    peekContent = peekContent.drop(2)
-                }
-                if (peekContent.startsWith(".")) {
-                    val (orphanName, _) = parseAttachmentName(peekContent.drop(1))
-                    throw IllegalArgumentException("orphan_attachment: .$orphanName without matching ^ cell")
-                }
-            }
-        }
-
-        if (rowHasID && allAttFields.isNotEmpty()) {
+        if (rowHasID) {
             val resolvedAttachments = mutableSetOf<String>()
             var inlineIdx = 0
 
-            while (i < lines.size && attachmentValues.size < allAttFields.size) {
+            while (i < lines.size) {
                 val aLine = lines[i]
                 var aContent: String? = when {
                     depth == 0 || aLine.startsWith(ind) -> if (depth > 0) aLine.drop(ind.length) else aLine
@@ -413,10 +409,7 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
                     val (attName, afterNameR) = parseAttachmentName(rest)
                     val afterNameS = afterNameR.trimStart()
 
-                    // Check orphan: attachment for field not in allAttFields.
-                    if (attName !in allAttFields) {
-                        throw IllegalArgumentException("orphan_attachment: $attName without matching ^ cell")
-                    }
+                    // Check duplicate.
                     // Check duplicate.
                     if (attName in resolvedAttachments) {
                         throw IllegalArgumentException("duplicate_attachment: $attName")
@@ -505,6 +498,10 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
             if (f in cellValues) { row[f] = cellValues[f]; continue }
             if (f in attachmentValues) { row[f] = attachmentValues[f]; continue }
         }
+        // Also add any orphan attachment values (fields excluded from column list, e.g. ">" fields).
+        for ((k, v) in attachmentValues) {
+            if (k !in row) row[k] = v
+        }
         // Unflatten path columns into nested objects.
         if (pathColumnMap.isNotEmpty()) {
             val nested = unflattenPathsKt(pathColumnMap, flatValues, flatAbsent)
@@ -588,6 +585,14 @@ private fun parseAttachment(lines: List<String>, lineIdx: Int, rest: String, dep
     if (afterName.startsWith("[")) {
         val (arr, consumed) = parseArrayFromHeader(lines, lineIdx, depth, afterName)
         return Triple(name, arr, consumed)
+    }
+    if (afterName.startsWith("=")) {
+        val valStr = afterName.drop(1)
+        val parsed = parseScalarValue(valStr, tabularContext = true)
+        return when (parsed) {
+            is ScalarParsed.Missing -> Triple(name, null, 1)
+            else -> Triple(name, scalarToAny(parsed), 1)
+        }
     }
     throw IllegalArgumentException("invalid attachment form: $afterName")
 }
