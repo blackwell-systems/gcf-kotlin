@@ -114,6 +114,83 @@ class RoundtripV2Test {
         }
     }
 
+    // Aligned arrays whose shared fields are fixed-shape nested objects, with a field
+    // or an intermediate nested level sometimes null/absent — the v3.2 flatten path the
+    // scalar-only generator above never produces.
+    @Test
+    fun `flatten roundtrip`() {
+        val rng = Random(7)
+        for (i in 0 until iterations) {
+            val v = genFlattenableArray(rng)
+            for (noFlatten in listOf(false, true)) {
+                val gcf = encodeGeneric(v, GenericOptions(noFlatten = noFlatten))
+                val decoded = decodeGeneric(gcf)
+                assertTrue(structuralEqual(v, decoded),
+                    "iteration $i noFlatten=$noFlatten: mismatch\n  input: $v\n  decoded: $decoded\n  gcf: $gcf")
+            }
+        }
+    }
+
+    private sealed class FlatShape {
+        object Scalar : FlatShape()
+        class Nested(val sub: List<Pair<String, FlatShape>>) : FlatShape()
+    }
+
+    private fun genFlatShape(rng: Random, depth: Int, maxDepth: Int): FlatShape {
+        if (depth >= maxDepth || rng.nextFloat() < 0.45) return FlatShape.Scalar
+        val sub = mutableListOf<Pair<String, FlatShape>>()
+        val seen = mutableSetOf<String>()
+        repeat(1 + rng.nextInt(3)) {
+            val k = genBareKey(rng)
+            if (seen.add(k)) sub.add(k to genFlatShape(rng, depth + 1, maxDepth))
+        }
+        return if (sub.isEmpty()) FlatShape.Scalar else FlatShape.Nested(sub)
+    }
+
+    private fun materializeFlatShape(rng: Random, shape: FlatShape): Any? = when (shape) {
+        is FlatShape.Scalar -> genScalar(rng)
+        is FlatShape.Nested -> linkedMapOf<String, Any?>().also { m ->
+            for ((k, s) in shape.sub) {
+                // A nested sub-object is sometimes null (intermediate null — the case the
+                // pre-fix encoder dropped) instead of a full object.
+                m[k] = if (s !is FlatShape.Scalar && rng.nextFloat() < 0.3) null
+                       else materializeFlatShape(rng, s)
+            }
+        }
+    }
+
+    private fun genFlattenableArray(rng: Random): List<Any?> {
+        val schema = mutableListOf<Pair<String, FlatShape>>("id" to FlatShape.Scalar)
+        val seen = mutableSetOf("id")
+        var hasNested = false
+        repeat(1 + rng.nextInt(3)) {
+            val k = genBareKey(rng)
+            if (seen.add(k)) {
+                val s = genFlatShape(rng, 1, 3)
+                if (s is FlatShape.Nested) hasNested = true
+                schema.add(k to s)
+            }
+        }
+        if (!hasNested) {
+            val k = genBareKey(rng)
+            schema.add(k to FlatShape.Nested(listOf(
+                genBareKey(rng) to FlatShape.Nested(listOf(genBareKey(rng) to FlatShape.Scalar)))))
+        }
+        val rows = 2 + rng.nextInt(6)
+        return (0 until rows).map {
+            linkedMapOf<String, Any?>().also { m ->
+                for ((f, s) in schema) {
+                    val x = rng.nextFloat()
+                    when {
+                        x < 0.12 -> {} // field absent this row
+                        x < 0.24 -> m[f] = null // field present-null (top-level null)
+                        else -> m[f] = materializeFlatShape(rng, s)
+                    }
+                }
+            }
+        }
+    }
+
     private fun structuralEqual(a: Any?, b: Any?): Boolean {
         if (a == null && b == null) return true
         if (a == null || b == null) return false

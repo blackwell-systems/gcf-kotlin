@@ -156,8 +156,16 @@ private fun analyzeFlattenable(arr: List<*>, fieldName: String, parentPath: Stri
 
     for (item in arr) {
         val map = item as? Map<String, Any?> ?: return null
-        if (fieldName !in map || map[fieldName] == null) continue
+        if (fieldName !in map) continue
         val v = map[fieldName]
+        // A nested (non-top-level) null cannot be flattened losslessly: its leaves
+        // would encode as absent ("~") and unflatten back to a missing key, not null.
+        // Bail to the attachment path. A top-level null is fine (emits "-" and
+        // reconstructs via the all-null rule), so just skip the row from shape analysis.
+        if (v == null) {
+            if (parentPath.isNotEmpty()) return null
+            continue
+        }
         if (v !is Map<*, *>) return null
         if (v is List<*>) return null
         val obj = v as Map<String, Any?>
