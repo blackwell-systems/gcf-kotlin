@@ -40,9 +40,72 @@ class ConformanceV2Test {
                     "encode" -> runEncode(relPath, data)
                     "decode" -> runDecode(relPath, data)
                     "error" -> runError(relPath, data)
+                    "generic-pack-root" -> runGenericPackRoot(relPath, data)
+                    "generic-delta" -> runGenericDelta(relPath, data)
+                    "generic-delta-verify" -> runGenericDeltaApply(relPath, data, decode = false)
+                    "generic-delta-decode" -> runGenericDeltaApply(relPath, data, decode = true)
                 }
             }
         }
+    }
+
+    private fun runGenericPackRoot(relPath: String, data: JsonObject) {
+        val set = toSet(jsonToAny(data["input"]!!))
+        assertEquals(data["expected"]!!.jsonPrimitive.content, genericPackRoot(set), "pack-root mismatch in $relPath")
+    }
+
+    private fun runGenericDelta(relPath: String, data: JsonObject) {
+        val d = toDelta(jsonToAny(data["input"]!!))
+        assertEquals(data["expected"]!!.jsonPrimitive.content, encodeGenericDelta(d), "delta encode mismatch in $relPath")
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun runGenericDeltaApply(relPath: String, data: JsonObject, decode: Boolean) {
+        val inp = jsonToAny(data["input"]!!) as Map<String, Any?>
+        val base = toSet(inp["base"])
+        val expNewRoot = inp["expectedNewRoot"] as? String ?: ""
+        val expectedError = data["expectedError"]?.jsonPrimitive?.content
+        val apply = {
+            val d = if (decode) decodeGenericDelta(inp["wire"] as String) else toDelta(inp["delta"])
+            verifyGenericDelta(base, d, expNewRoot)
+        }
+        if (expectedError != null) {
+            try {
+                apply()
+                fail("expected error '$expectedError' but got success in $relPath")
+            } catch (e: Exception) {
+                assertTrue(expectedError in e.message.orEmpty(), "wrong error in $relPath: got '${e.message}'")
+            }
+        } else {
+            assertEquals(data["expected"]!!.jsonPrimitive.content, genericPackRoot(apply()), "applied root mismatch in $relPath")
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun toSet(v: Any?): GenericSet {
+        val m = v as Map<String, Any?>
+        return GenericSet(
+            key = m["key"] as? String ?: "",
+            fields = (m["fields"] as? List<Any?>)?.map { it as String } ?: emptyList(),
+            rows = (m["rows"] as? List<Any?>)?.map { it as Map<String, Any?> } ?: emptyList(),
+        )
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun toDelta(v: Any?): GenericDeltaPayload {
+        val m = v as Map<String, Any?>
+        return GenericDeltaPayload(
+            key = m["key"] as? String ?: "",
+            fields = (m["fields"] as? List<Any?>)?.map { it as String } ?: emptyList(),
+            baseRoot = m["baseRoot"] as? String ?: "",
+            newRoot = m["newRoot"] as? String ?: "",
+            added = (m["added"] as? List<Any?>)?.map { it as Map<String, Any?> } ?: emptyList(),
+            changed = (m["changed"] as? List<Any?>)?.map { it as Map<String, Any?> } ?: emptyList(),
+            removed = (m["removed"] as? List<Any?>) ?: emptyList(),
+            tool = m["tool"] as? String ?: "",
+            deltaTokens = (m["deltaTokens"] as? Number)?.toInt() ?: 0,
+            fullTokens = (m["fullTokens"] as? Number)?.toInt() ?: 0,
+        )
     }
 
     private fun runEncode(relPath: String, data: JsonObject) {
