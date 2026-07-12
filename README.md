@@ -139,10 +139,10 @@ val enc = StreamEncoder(writer, "context_for_task", StreamOptions(tokenBudget = 
 
 enc.writeSymbol(Symbol(qualifiedName = "pkg.Auth", kind = "function", score = 0.95, provenance = "lsp", distance = 0))
 enc.writeEdge(Edge(source = "pkg.Server", target = "pkg.Auth", edgeType = "calls"))
-enc.close()  // emits ## _summary trailer
+enc.close()  // emits ##! summary trailer
 ```
 
-Output uses `[?]` deferred counts and `## _summary` trailer. Standard `decode()` handles streaming output with no changes. Thread-safe via `@Synchronized`.
+Output uses `[?]` deferred counts and `##! summary` trailer. Standard `decode()` handles streaming output with no changes. Thread-safe via `@Synchronized`.
 
 ## Delta Encoding
 
