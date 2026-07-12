@@ -35,9 +35,13 @@ class ConformanceV2Test {
                 if (op in listOf("session", "delta")) return@dynamicTest
                 if (data.containsKey("inputBase64")) return@dynamicTest
                 if ("negative_zero" in relPath) return@dynamicTest
-                // Skip a fixture requesting stream options this runner does not support
-                // (e.g. labeledTrailerCounts, SPEC 8.4.1). This runner supports none.
-                if (op == "graph-stream-encode" && (data["options"] as? JsonObject)?.isNotEmpty() == true) return@dynamicTest
+                // Skip a graph-stream-encode fixture requesting stream options this runner
+                // does not support. labeledTrailerCounts (SPEC 8.4.1) IS supported; skip only
+                // if options carries some OTHER key.
+                if (op == "graph-stream-encode") {
+                    val opts = (data["options"] as? JsonObject)
+                    if (opts != null && opts.keys.any { it != "labeledTrailerCounts" }) return@dynamicTest
+                }
 
                 when (op) {
                     "encode" -> runEncode(relPath, data)
@@ -119,6 +123,8 @@ class ConformanceV2Test {
             tokenBudget = (inp["tokenBudget"] as? Number)?.toInt() ?: 0,
             tokensUsed = (inp["tokensUsed"] as? Number)?.toInt() ?: 0,
             packRoot = inp["packRoot"] as? String ?: "",
+            labeledTrailerCounts = (data["options"] as? JsonObject)
+                ?.get("labeledTrailerCounts")?.jsonPrimitive?.booleanOrNull ?: false,
         )
 
         val out = java.io.StringWriter()

@@ -9,7 +9,11 @@ data class StreamOptions(
     val tokenBudget: Int = 0,
     val tokensUsed: Int = 0,
     val packRoot: String = "",
-    val session: Boolean = false
+    val session: Boolean = false,
+    // labeledTrailerCounts opts into the labeled trailer counts form (SPEC §8.4.1):
+    // the graph "##! summary" counts field is emitted as label:count
+    // (counts=targets:2,related:1,edges:3) instead of the positional default.
+    val labeledTrailerCounts: Boolean = false
 )
 
 /**
@@ -28,6 +32,7 @@ class StreamEncoder(
     private val groupCounts = mutableListOf<Pair<String, Int>>()
     private var edgeCount = 0
     private var edgesStarted = false
+    private val labeledTrailerCounts = options.labeledTrailerCounts
 
     init {
         val parts = mutableListOf("GCF profile=graph tool=$tool")
@@ -114,13 +119,22 @@ class StreamEncoder(
     /** Emit ##! summary trailer with final counts. */
     @Synchronized
     fun close() {
-        val counts = mutableListOf<String>()
-        for ((_, c) in groupCounts) {
-            if (c > 0) counts.add(c.toString())
+        // Build label:count sections in emission order.
+        val sections = mutableListOf<String>()
+        for ((name, c) in groupCounts) {
+            if (c > 0) sections.add("$name:$c")
         }
-        if (edgeCount > 0) counts.add(edgeCount.toString())
+        if (edgeCount > 0) sections.add("edges:$edgeCount")
 
-        writer.write("##! summary symbols=$nextID edges=$edgeCount counts=${counts.joinToString(",")}\n")
+        val countsStr = if (labeledTrailerCounts) {
+            // Labeled form (SPEC §8.4.1): label:count per entry.
+            sections.joinToString(",")
+        } else {
+            // Positional form (default): values only.
+            sections.map { it.substringAfter(":") }.joinToString(",")
+        }
+
+        writer.write("##! summary symbols=$nextID edges=$edgeCount counts=$countsStr\n")
         writer.flush()
     }
 
