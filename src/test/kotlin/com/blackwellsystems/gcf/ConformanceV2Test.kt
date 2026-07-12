@@ -45,6 +45,7 @@ class ConformanceV2Test {
                     "generic-delta-verify" -> runGenericDeltaApply(relPath, data, decode = false)
                     "generic-delta-decode" -> runGenericDeltaApply(relPath, data, decode = true)
                     "generic-delta-session" -> runGenericDeltaSession(relPath, data)
+                    "graph-stream-encode" -> runGraphStreamEncode(relPath, data)
                 }
             }
         }
@@ -105,6 +106,47 @@ class ConformanceV2Test {
             assertEquals(emission["isFull"] as Boolean, isFull, "turn ${i + 1} isFull mismatch in $relPath")
             assertEquals(emission["wire"] as String, wire, "turn ${i + 1} wire mismatch in $relPath")
         }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun runGraphStreamEncode(relPath: String, data: JsonObject) {
+        val inp = jsonToAny(data["input"]!!) as Map<String, Any?>
+        val tool = inp["tool"] as? String ?: ""
+        val options = StreamOptions(
+            tokenBudget = (inp["tokenBudget"] as? Number)?.toInt() ?: 0,
+            tokensUsed = (inp["tokensUsed"] as? Number)?.toInt() ?: 0,
+            packRoot = inp["packRoot"] as? String ?: "",
+        )
+
+        val out = java.io.StringWriter()
+        val enc = StreamEncoder(out, tool, options)
+
+        for (s in (inp["symbols"] as? List<Any?> ?: emptyList())) {
+            val m = s as Map<String, Any?>
+            enc.writeSymbol(
+                Symbol(
+                    qualifiedName = m["qualifiedName"] as? String ?: "",
+                    kind = m["kind"] as? String ?: "",
+                    score = (m["score"] as? Number)?.toDouble() ?: 0.0,
+                    provenance = m["provenance"] as? String ?: "",
+                    distance = (m["distance"] as? Number)?.toInt() ?: 0,
+                )
+            )
+        }
+        for (e in (inp["edges"] as? List<Any?> ?: emptyList())) {
+            val m = e as Map<String, Any?>
+            enc.writeEdge(
+                Edge(
+                    source = m["source"] as? String ?: "",
+                    target = m["target"] as? String ?: "",
+                    edgeType = m["edgeType"] as? String ?: "",
+                    status = m["status"] as? String ?: "",
+                )
+            )
+        }
+        enc.close()
+
+        assertEquals(data["expected"]!!.jsonPrimitive.content, out.toString(), "graph-stream-encode mismatch in $relPath")
     }
 
     @Suppress("UNCHECKED_CAST")
