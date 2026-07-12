@@ -183,6 +183,41 @@ Sales|2|Bob|72000
 
 Works on maps, lists, and primitives. Arrays of uniform maps get tabular rows. Nested maps use `## key` section headers.
 
+## Generic-Profile Delta (multi-turn)
+
+In an agent loop the same keyed table gets re-queried turn after turn. Instead of re-sending the whole table each time, send only the changed rows (SPEC §10a):
+
+```kotlin
+val base = GenericSet(key = "id", fields = listOf("id", "status"), rows = listOf(
+    mapOf("id" to 1001, "status" to "pending"),
+    mapOf("id" to 1002, "status" to "shipped"),
+))
+val next = GenericSet(key = "id", fields = listOf("id", "status"), rows = listOf(
+    mapOf("id" to 1001, "status" to "shipped"),   // changed
+    mapOf("id" to 1003, "status" to "pending"),   // added (1002 removed)
+))
+
+val d = diffGenericSets(base, next)              // the blessed producer path
+val wire = encodeGenericDelta(d)                 // ## added / ## changed / ## removed
+val held = verifyGenericDelta(base, d, d.newRoot) // atomic apply + new_root verification
+```
+
+Opt-in and bilateral, keyed on content-addressed pack roots. By the 5th overlapping call, ~97% fewer tokens than re-sending JSON. Byte-for-byte interoperable with the Go, Python, TypeScript, Rust, and Swift SDKs.
+
+### Re-anchor session helper
+
+`GenericDeltaSession` manages the delta/re-anchor cadence for you: each `next()` returns either a compact delta or, on its cadence, a full re-anchor (which re-grounds the consumer), updating its held base.
+
+```kotlin
+val sess = GenericDeltaSession(base, tool = "orders", policy = ReanchorPolicy.SizeGuard)
+val establish = sess.currentFull()               // transmit the base once to establish it
+for (snapshot in stream) {                        // each turn's current GenericSet
+    val (wire, isFull) = sess.next(snapshot)      // a compact delta, or a periodic full re-anchor
+}
+```
+
+`ReanchorPolicy.FixedN(15)` re-anchors every N turns; `ReanchorPolicy.SizeGuard` (recommended) re-anchors once the cumulative delta reaches a full payload's size. It introduces no new wire syntax and the decoder stays cadence-agnostic, so a re-anchor is just the protocol's "full" outcome on a schedule. A schema change forces a full (§10a.7).
+
 ## API
 
 | Function | Description |
@@ -191,7 +226,11 @@ Works on maps, lists, and primitives. Arrays of uniform maps get tabular rows. N
 | `encodeGeneric(data: Any?): String` | Encode any value to GCF tabular format |
 | `decode(input: String): Payload` | Parse GCF text back to a Payload |
 | `encodeWithSession(payload: Payload, session: Session?): String` | Encode with session deduplication |
-| `encodeDelta(delta: DeltaPayload): String` | Encode a delta (added/removed only) |
+| `encodeDelta(delta: DeltaPayload): String` | Encode a graph delta (added/removed only) |
+| `diffGenericSets(base: GenericSet, next: GenericSet): GenericDeltaPayload` | Diff two keyed record sets (generic profile) |
+| `encodeGenericDelta(d: GenericDeltaPayload): String` / `decodeGenericDelta(s: String): GenericDeltaPayload` | Generic-profile delta wire (§10a) |
+| `verifyGenericDelta(base: GenericSet, d: GenericDeltaPayload, root: String): GenericSet` | Atomic apply + `new_root` verification |
+| `GenericDeltaSession(base, tool, policy)` | Producer-side re-anchor cadence helper (§10a.8) |
 | `Session()` | Create a new session tracker (thread-safe) |
 
 ## Types
@@ -201,7 +240,10 @@ Works on maps, lists, and primitives. Arrays of uniform maps get tabular rows. N
 | `Payload` | Full GCF payload: tool, budget, symbols, edges, pack root |
 | `Symbol` | Graph node: qualified name, kind, score, provenance, distance |
 | `Edge` | Directed relationship: source, target, edge type |
-| `DeltaPayload` | Diff between two packs: added/removed symbols and edges |
+| `DeltaPayload` | Diff between two graph packs: added/removed symbols and edges |
+| `GenericSet` / `GenericDeltaPayload` | Keyed record set and its generic-profile diff (§10a) |
+| `GenericDeltaSession` | Stateful producer that schedules delta vs full re-anchor (§10a.8) |
+| `ReanchorPolicy` | Re-anchor cadence: `FixedN(n)` or `SizeGuard` |
 | `Session` | Thread-safe tracker for multi-call deduplication |
 | `Components` | Score breakdown: blast radius, confidence, recency, distance |
 | `DecodeException` | Thrown on invalid GCF input |

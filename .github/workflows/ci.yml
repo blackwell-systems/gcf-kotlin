@@ -10,7 +10,16 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # Check out gcf-kotlin and the shared-fixtures gcf repo as SIBLINGS so the
+      # conformance runner's ../gcf/tests/conformance path (resolved from the
+      # gradle process working directory, user.dir) finds the fixtures on CI.
       - uses: actions/checkout@v4
+        with:
+          path: gcf-kotlin
+      - uses: actions/checkout@v4
+        with:
+          repository: blackwell-systems/gcf
+          path: gcf
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -18,5 +27,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Generate wrapper
         run: gradle wrapper --gradle-version 8.5
-      - name: Run tests
+        working-directory: gcf-kotlin
+      - name: Run tests (unit + shared-fixture conformance)
         run: ./gradlew test
+        working-directory: gcf-kotlin
