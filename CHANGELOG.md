@@ -10,12 +10,14 @@
   - `diffGenericSets` (the blessed producer path; centralizes the keyed-diff invariants), `encodeGenericFull`, `encodeGenericDelta`
   - `decodeGenericFull`, `decodeGenericDelta` (consumer wire parsing)
   - `verifyGenericDelta` (atomic apply + `new_root` verification)
+  - `GenericDeltaSession` (SPEC §10a.8): producer-side re-anchor cadence helper. Thin sugar over the primitives (introduces no wire syntax); each `next` emits either a compact delta or, on its chosen cadence, a full re-anchor, updating its held base. `ReanchorPolicy.FixedN(n)` (re-anchors every `n` turns; `n <= 0` falls back to `DEFAULT_REANCHOR_N = 15`) and `ReanchorPolicy.SizeGuard` (re-anchors once cumulative delta bytes reach the current full-payload byte size). Cumulative and payload sizes are measured in UTF-8 bytes (`toByteArray(Charsets.UTF_8).size`), matching Go's `len(string)`, so the cadence is identical across SDKs. A schema change forces a full (§10a.7).
 - Delta is opt-in and bilateral; the existing `encodeGeneric` path is unchanged (backward compatible). SHA-256 uses `java.security.MessageDigest` (JDK standard library, no dependency added).
 
 ### Tests
 
 - Unit suite mirroring the other SDKs: self-proving round-trip (diff -> encode -> apply -> recomputed root), determinism / row-order invariance, no-type-collision canonicalization, every invariant/error path, full-payload wire round-trip, the complete server -> wire -> consumer end-to-end loop, and malformed-wire-fails-closed.
-- Conformance runner support for `generic-pack-root`, `generic-delta`, `generic-delta-verify`, `generic-delta-decode` (12 shared fixtures); produces identical pack roots and delta wire to the Go, Python, TypeScript, Rust, and Swift SDKs.
+- Conformance runner support for `generic-pack-root`, `generic-delta`, `generic-delta-verify`, `generic-delta-decode`, and `generic-delta-session` shared fixtures; produces identical pack roots, delta wire, and re-anchor cadence to the Go, Python, TypeScript, Rust, and Swift SDKs.
+- `GenericDeltaSessionTest` mirrors the Go session suite: FixedN cadence pattern, SizeGuard triggering, schema-change forced full, exactly two re-anchors over 30 same-schema turns at N=15, and the load-bearing consumer-stays-in-sync loop (apply each emission; recomputed root matches the producer state every turn) under both policies.
 
 ## v2.2.2 (2026-07-10)
 

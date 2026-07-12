@@ -44,6 +44,7 @@ class ConformanceV2Test {
                     "generic-delta" -> runGenericDelta(relPath, data)
                     "generic-delta-verify" -> runGenericDeltaApply(relPath, data, decode = false)
                     "generic-delta-decode" -> runGenericDeltaApply(relPath, data, decode = true)
+                    "generic-delta-session" -> runGenericDeltaSession(relPath, data)
                 }
             }
         }
@@ -82,12 +83,38 @@ class ConformanceV2Test {
     }
 
     @Suppress("UNCHECKED_CAST")
+    private fun runGenericDeltaSession(relPath: String, data: JsonObject) {
+        val inp = jsonToAny(data["input"]!!) as Map<String, Any?>
+        val exp = jsonToAny(data["expected"]!!) as Map<String, Any?>
+        val tool = inp["tool"] as? String ?: ""
+        val policyMap = inp["policy"] as Map<String, Any?>
+        val policy: ReanchorPolicy = if (policyMap["mode"] == "sizeGuard") {
+            ReanchorPolicy.SizeGuard
+        } else {
+            ReanchorPolicy.FixedN((policyMap["n"] as? Number)?.toInt() ?: 0)
+        }
+
+        val session = GenericDeltaSession(toSet(inp["base"]), tool, policy)
+        assertEquals(exp["initialFull"] as String, session.currentFull(), "initial full mismatch in $relPath")
+
+        val updates = inp["updates"] as List<Any?>
+        val emissions = exp["emissions"] as List<Any?>
+        for ((i, up) in updates.withIndex()) {
+            val (wire, isFull) = session.next(toSet(up))
+            val emission = emissions[i] as Map<String, Any?>
+            assertEquals(emission["isFull"] as Boolean, isFull, "turn ${i + 1} isFull mismatch in $relPath")
+            assertEquals(emission["wire"] as String, wire, "turn ${i + 1} wire mismatch in $relPath")
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
     private fun toSet(v: Any?): GenericSet {
         val m = v as Map<String, Any?>
         return GenericSet(
             key = m["key"] as? String ?: "",
             fields = (m["fields"] as? List<Any?>)?.map { it as String } ?: emptyList(),
             rows = (m["rows"] as? List<Any?>)?.map { it as Map<String, Any?> } ?: emptyList(),
+            name = m["name"] as? String ?: "",
         )
     }
 

@@ -437,3 +437,98 @@ fun decodeGenericDelta(text: String): GenericDeltaPayload {
         added = added, changed = changed, removed = removed, tool = hdr["tool"] ?: "",
     )
 }
+
+// --- producer-side re-anchor session helper (SPEC Section 10a.8) ---
+
+/** The working default cadence for [ReanchorPolicy.FixedN] (Section 10a.8). */
+const val DEFAULT_REANCHOR_N = 15
+
+/**
+ * Selects when a [GenericDeltaSession] re-anchors. This is non-normative producer
+ * policy: it introduces no wire syntax and is never a wire field.
+ */
+sealed interface ReanchorPolicy {
+    /** Re-anchor every [n] turns. [n] <= 0 falls back to [DEFAULT_REANCHOR_N]. */
+    data class FixedN(val n: Int) : ReanchorPolicy {
+        val effectiveN: Int get() = if (n <= 0) DEFAULT_REANCHOR_N else n
+    }
+
+    /**
+     * Re-anchor once the cumulative delta bytes since the last anchor reach the
+     * current full payload's byte size: more anchors under heavy churn, rarely
+     * under light churn, bounding the delta spent between anchors to about one
+     * full payload. Production-recommended.
+     */
+    data object SizeGuard : ReanchorPolicy
+}
+
+/**
+ * A producer-side helper that manages the re-anchor cadence for a stream of
+ * generic-profile updates (SPEC Section 10a.8, non-normative producer policy). It
+ * is thin sugar over the primitives: each [next] emits either a compact delta or,
+ * on its chosen cadence, a full re-anchor (the spec's "full" outcome), updating
+ * its held base. It introduces NO new wire syntax: every payload it emits is
+ * exactly what [encodeGenericFull] or [encodeGenericDelta] produce, and the
+ * decoder accepts them cadence-agnostically. Not safe for concurrent use.
+ */
+class GenericDeltaSession(
+    base: GenericSet,
+    private val tool: String,
+    private val policy: ReanchorPolicy,
+) {
+    private var base: GenericSet = base
+    /** The number of [next] calls so far (the initial full is turn 0). */
+    var turn: Int = 0
+        private set
+    private var cum: Int = 0 // cumulative delta bytes since the last anchor
+
+    /**
+     * Returns the full payload for the current base ([encodeGenericFull]). Send
+     * this first to establish the base; it is also a valid manual re-anchor.
+     */
+    fun currentFull(): String = encodeGenericFull(base, tool)
+
+    /**
+     * Advances the session by one turn to [next], returning the wire to transmit
+     * and whether it is a full re-anchor (true) or a delta (false). A schema
+     * change forces a full (Section 10a.7). The held base becomes [next] either
+     * way. The wire is byte-identical to calling [encodeGenericFull] /
+     * [encodeGenericDelta] directly.
+     */
+    fun next(next: GenericSet): Pair<String, Boolean> {
+        turn++
+
+        // Schema change (or a fresh key) cannot be expressed as a delta -> full.
+        if (next.key != base.key || base.fields != next.fields) {
+            return Pair(reanchor(next), true)
+        }
+
+        val d = diffGenericSets(base, next)
+        val deltaWire = encodeGenericDelta(d)
+
+        val doReanchor = when (policy) {
+            is ReanchorPolicy.SizeGuard ->
+                cum + byteLen(deltaWire) >= byteLen(encodeGenericFull(next, tool))
+            is ReanchorPolicy.FixedN ->
+                turn % policy.effectiveN == 0
+        }
+
+        if (doReanchor) {
+            return Pair(reanchor(next), true)
+        }
+        base = next
+        cum += byteLen(deltaWire)
+        return Pair(deltaWire, false)
+    }
+
+    /** Emit a full for [next], advance the base, reset the cumulative counter. */
+    private fun reanchor(next: GenericSet): String {
+        val wire = encodeGenericFull(next, tool)
+        base = next
+        cum = 0
+        return wire
+    }
+}
+
+/** UTF-8 byte length, matching Go's `len(string)` (NOT UTF-16 unit count). */
+private fun byteLen(s: String): Int = s.toByteArray(Charsets.UTF_8).size
