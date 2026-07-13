@@ -138,7 +138,16 @@ private fun parseObjectBody(lines: List<String>, start: Int, depth: Int, out: Li
                 }
             }
         }
-        i++
+
+        // An object-body line that is not a `## ` section, a `key=value` field, or
+        // an inline array is not valid content and MUST NOT be silently skipped
+        // (that dropped data, a lossless round-trip hole). A pipe-delimited line is
+        // a stray positional inline body with no eligible `^` cell (SPEC 16.5,
+        // orphan_inline_attachment); any other unrecognized line is likewise rejected.
+        if (content.contains("|")) {
+            throw IllegalArgumentException("orphan_inline_attachment: $content")
+        }
+        throw IllegalArgumentException("invalid_line: unexpected content in object body: $content")
     }
     return i - start
 }
