@@ -71,16 +71,15 @@ class ConformanceV2Test {
                     "delta" -> {
                         // graph-delta/002 is tagged `delta` but its `input` is a wire
                         // string (verify scenario with base_snapshot), not a DeltaPayload.
-                        // Route it to the delta-verify allow-list rather than the encoder.
+                        // Route it to the verify path rather than the encoder.
                         val inputIsWire = (data["input"] as? JsonPrimitive)?.isString == true
                         if (inputIsWire || data.containsKey("base_snapshot")) {
-                            // graph delta wire decoder not yet implemented
-                            return@dynamicTest
+                            runDeltaVerify(relPath, data)
+                        } else {
+                            runDelta(relPath, data)
                         }
-                        runDelta(relPath, data)
                     }
-                    // graph delta wire decoder not yet implemented
-                    "delta-verify" -> return@dynamicTest
+                    "delta-verify" -> runDeltaVerify(relPath, data)
                     else -> fail("unhandled operation: $op; must be handled or allow-listed")
                 }
             }
@@ -331,6 +330,65 @@ class ConformanceV2Test {
             fullTokens = (inp["fullTokens"] as? Number)?.toInt() ?: 0,
         )
         assertEquals(data["expected"]!!.jsonPrimitive.content, encodeDelta(delta), "delta encode mismatch in $relPath")
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun snapshotSymbols(v: Any?): List<Symbol> =
+        (v as? List<Any?> ?: emptyList()).map { s ->
+            val m = s as Map<String, Any?>
+            Symbol(
+                qualifiedName = m["qualifiedName"] as? String ?: "",
+                kind = m["kind"] as? String ?: "",
+                score = (m["score"] as? Number)?.toDouble() ?: 0.0,
+                provenance = m["provenance"] as? String ?: "",
+                distance = (m["distance"] as? Number)?.toInt() ?: 0,
+            )
+        }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun snapshotEdges(v: Any?): List<Edge> =
+        (v as? List<Any?> ?: emptyList()).map { e ->
+            val m = e as Map<String, Any?>
+            Edge(
+                source = m["source"] as? String ?: "",
+                target = m["target"] as? String ?: "",
+                edgeType = m["edgeType"] as? String ?: "",
+                status = m["status"] as? String ?: "",
+            )
+        }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun runDeltaVerify(relPath: String, data: JsonObject) {
+        val wire = data["input"]!!.jsonPrimitive.content
+        val baseSnapshot = jsonToAny(data["base_snapshot"]!!) as Map<String, Any?>
+        val baseSymbols = snapshotSymbols(baseSnapshot["symbols"])
+        val baseEdges = snapshotEdges(baseSnapshot["edges"])
+        val expectedError = data["expectedError"]?.jsonPrimitive?.content
+
+        val d = decodeDelta(wire)
+        val apply = {
+            verifyDelta(
+                baseSymbols, baseEdges,
+                d.removed, d.added,
+                d.removedEdges, d.addedEdges,
+                d.newRoot,
+            )
+        }
+
+        if (expectedError != null) {
+            try {
+                apply()
+                fail("expected error '$expectedError' but got success in $relPath")
+            } catch (e: Exception) {
+                assertTrue(expectedError in e.message.orEmpty(), "wrong error in $relPath: got '${e.message}'")
+            }
+        } else {
+            val (symbols, edges) = apply()
+            val expectedSnapshot = jsonToAny(data["expected_snapshot"]!!) as Map<String, Any?>
+            val expSymbols = snapshotSymbols(expectedSnapshot["symbols"])
+            val expEdges = snapshotEdges(expectedSnapshot["edges"])
+            assertEquals(packRoot(expSymbols, expEdges), packRoot(symbols, edges), "verified snapshot mismatch in $relPath")
+        }
     }
 
     private fun runDecode(relPath: String, data: JsonObject) {
