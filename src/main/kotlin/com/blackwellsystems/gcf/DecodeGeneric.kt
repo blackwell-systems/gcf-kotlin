@@ -391,6 +391,13 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
             val resolvedAttachments = mutableSetOf<String>()
             var inlineIdx = 0
 
+            // Columns that carry a `^` marker cell in this row legitimately expect
+            // a `.field` body. Any other `.field` is an orphan (Section 16.5) unless
+            // its name contains `>` (the flatten-fallback attachment, Section 7.4.6.1.4).
+            val expectedAtt = mutableSetOf<String>()
+            expectedAtt.addAll(traditionalAttFields)
+            expectedAtt.addAll(inlineAttFields)
+
             while (i < lines.size) {
                 val aLine = lines[i]
                 var aContent: String? = when {
@@ -409,7 +416,15 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
                     val (attName, afterNameR) = parseAttachmentName(rest)
                     val afterNameS = afterNameR.trimStart()
 
-                    // Check duplicate.
+                    // Orphan attachment: a `.field` with no matching `^` cell in this
+                    // row is only legitimate for a `>`-named field (Section 7.4.6.1.4).
+                    // Any other unmatched attachment is rejected rather than silently
+                    // injected as an undeclared extra field, which would decode to a
+                    // record no encoder produces (Section 16.5, lossless round-trip).
+                    if (attName !in expectedAtt && ">" !in attName) {
+                        throw IllegalArgumentException("orphan_attachment: $attName")
+                    }
+
                     // Check duplicate.
                     if (attName in resolvedAttachments) {
                         throw IllegalArgumentException("duplicate_attachment: $attName")
