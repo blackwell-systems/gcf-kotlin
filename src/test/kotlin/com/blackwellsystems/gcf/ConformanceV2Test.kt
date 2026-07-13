@@ -45,7 +45,6 @@ class ConformanceV2Test {
         return fixtures.map { (relPath, data) ->
             DynamicTest.dynamicTest(relPath) {
                 val op = data["operation"]?.jsonPrimitive?.content ?: return@dynamicTest
-                if (op in listOf("session", "delta")) return@dynamicTest
                 if (data.containsKey("inputBase64")) return@dynamicTest
                 if ("negative_zero" in relPath) return@dynamicTest
                 // Skip a graph-stream-encode fixture requesting stream options this runner
@@ -59,6 +58,7 @@ class ConformanceV2Test {
                 when (op) {
                     "encode" -> runEncode(relPath, data)
                     "decode" -> runDecode(relPath, data)
+                    "roundtrip" -> runRoundtrip(relPath, data)
                     "error" -> runError(relPath, data)
                     "pack-root" -> runPackRoot(relPath, data)
                     "generic-pack-root" -> runGenericPackRoot(relPath, data)
@@ -67,6 +67,21 @@ class ConformanceV2Test {
                     "generic-delta-decode" -> runGenericDeltaApply(relPath, data, decode = true)
                     "generic-delta-session" -> runGenericDeltaSession(relPath, data)
                     "graph-stream-encode" -> runGraphStreamEncode(relPath, data)
+                    "session" -> runSession(relPath, data)
+                    "delta" -> {
+                        // graph-delta/002 is tagged `delta` but its `input` is a wire
+                        // string (verify scenario with base_snapshot), not a DeltaPayload.
+                        // Route it to the delta-verify allow-list rather than the encoder.
+                        val inputIsWire = (data["input"] as? JsonPrimitive)?.isString == true
+                        if (inputIsWire || data.containsKey("base_snapshot")) {
+                            // graph delta wire decoder not yet implemented
+                            return@dynamicTest
+                        }
+                        runDelta(relPath, data)
+                    }
+                    // graph delta wire decoder not yet implemented
+                    "delta-verify" -> return@dynamicTest
+                    else -> fail("unhandled operation: $op; must be handled or allow-listed")
                 }
             }
         }
@@ -236,6 +251,86 @@ class ConformanceV2Test {
         // Round-trip.
         val decoded = decodeGeneric(got)
         assertTrue(structuralEqual(jsonToAny(data["input"]!!), decoded), "round-trip mismatch in $relPath")
+    }
+
+    private fun runRoundtrip(relPath: String, data: JsonObject) {
+        val input = jsonToAny(data["input"]!!)
+        val got = encodeGeneric(input)
+        data["expected"]?.jsonPrimitive?.content?.let { expected ->
+            assertEquals(expected, got, "roundtrip encode mismatch in $relPath")
+        }
+        val decoded = decodeGeneric(got)
+        assertTrue(structuralEqual(input, decoded), "round-trip mismatch in $relPath\n  got: $decoded\n  exp: $input")
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun runSession(relPath: String, data: JsonObject) {
+        val calls = data["calls"]!!.jsonArray
+        val session = Session()
+        for ((i, callEl) in calls.withIndex()) {
+            val call = callEl.jsonObject
+            val inp = jsonToAny(call["input"]!!) as Map<String, Any?>
+            val payload = Payload(
+                tool = inp["tool"] as? String ?: "",
+                symbols = (inp["symbols"] as? List<Any?> ?: emptyList()).map { s ->
+                    val m = s as Map<String, Any?>
+                    Symbol(
+                        qualifiedName = m["qualifiedName"] as? String ?: "",
+                        kind = m["kind"] as? String ?: "",
+                        score = (m["score"] as? Number)?.toDouble() ?: 0.0,
+                        provenance = m["provenance"] as? String ?: "",
+                        distance = (m["distance"] as? Number)?.toInt() ?: 0,
+                    )
+                },
+                edges = (inp["edges"] as? List<Any?> ?: emptyList()).map { e ->
+                    val m = e as Map<String, Any?>
+                    Edge(
+                        source = m["source"] as? String ?: "",
+                        target = m["target"] as? String ?: "",
+                        edgeType = m["edgeType"] as? String ?: "",
+                        status = m["status"] as? String ?: "",
+                    )
+                },
+            )
+            val expected = call["expected"]!!.jsonPrimitive.content
+            assertEquals(expected, encodeWithSession(payload, session), "session call ${i + 1} mismatch in $relPath")
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun runDelta(relPath: String, data: JsonObject) {
+        val inp = jsonToAny(data["input"]!!) as Map<String, Any?>
+        fun symbols(key: String) = (inp[key] as? List<Any?> ?: emptyList()).map { s ->
+            val m = s as Map<String, Any?>
+            Symbol(
+                qualifiedName = m["qualifiedName"] as? String ?: "",
+                kind = m["kind"] as? String ?: "",
+                score = (m["score"] as? Number)?.toDouble() ?: 0.0,
+                provenance = m["provenance"] as? String ?: "",
+                distance = (m["distance"] as? Number)?.toInt() ?: 0,
+            )
+        }
+        fun edges(key: String) = (inp[key] as? List<Any?> ?: emptyList()).map { e ->
+            val m = e as Map<String, Any?>
+            Edge(
+                source = m["source"] as? String ?: "",
+                target = m["target"] as? String ?: "",
+                edgeType = m["edgeType"] as? String ?: "",
+                status = m["status"] as? String ?: "",
+            )
+        }
+        val delta = DeltaPayload(
+            tool = inp["tool"] as? String ?: "",
+            baseRoot = inp["baseRoot"] as? String ?: "",
+            newRoot = inp["newRoot"] as? String ?: "",
+            removed = symbols("removed"),
+            added = symbols("added"),
+            removedEdges = edges("removedEdges"),
+            addedEdges = edges("addedEdges"),
+            deltaTokens = (inp["deltaTokens"] as? Number)?.toInt() ?: 0,
+            fullTokens = (inp["fullTokens"] as? Number)?.toInt() ?: 0,
+        )
+        assertEquals(data["expected"]!!.jsonPrimitive.content, encodeDelta(delta), "delta encode mismatch in $relPath")
     }
 
     private fun runDecode(relPath: String, data: JsonObject) {

@@ -65,27 +65,38 @@ fun encodeWithSession(payload: Payload, session: Session?): String {
 
     val b = StringBuilder()
 
-    // Build local ID mapping for this response.
-    val localIndex = mutableMapOf<String, Int>()
-    payload.symbols.forEachIndexed { i, s ->
-        localIndex[s.qualifiedName] = i
-    }
-
-    // Count valid edges.
-    val validEdges = payload.edges.count { localIndex.containsKey(it.source) && localIndex.containsKey(it.target) }
-
-    // Header with session=true marker.
-    b.append("GCF profile=graph tool=${payload.tool} budget=${payload.tokenBudget} tokens=${payload.tokensUsed} symbols=${payload.symbols.size} edges=$validEdges session=true")
-    if (payload.packRoot.isNotEmpty()) {
-        b.append(" pack_root=${payload.packRoot}")
-    }
-    b.append('\n')
-
-    // Track which are new.
+    // Snapshot which symbols were already transmitted BEFORE this response, so we
+    // can decide full-vs-bare per symbol. New symbols are then registered to obtain
+    // stable session-global IDs (SPEC: @N references are session-scoped and stable
+    // across calls, not per-response positional indices).
     data class SymbolEntry(val symbol: Symbol, val isNew: Boolean)
     val entries = payload.symbols.map { s ->
         SymbolEntry(s, !session.transmitted(s.qualifiedName))
     }
+    session.record(entries.filter { it.isNew }.map { it.symbol })
+
+    // Session-global ID for any symbol in this response.
+    val idOf: (String) -> Int = { qname -> session.getID(qname) }
+
+    // Count valid edges (both endpoints present in this response's symbol set).
+    val symbolNames = payload.symbols.map { it.qualifiedName }.toSet()
+    val validEdges = payload.edges.count { it.source in symbolNames && it.target in symbolNames }
+
+    // Header with session=true marker. Optional count fields are omitted when zero
+    // so the wire matches the canonical graph header (SPEC 5; see graph-encode
+    // fixtures and the streaming header in Stream.kt).
+    val parts = mutableListOf("GCF profile=graph tool=${payload.tool}")
+    if (payload.tokenBudget > 0) parts.add("budget=${payload.tokenBudget}")
+    if (payload.tokensUsed > 0) parts.add("tokens=${payload.tokensUsed}")
+    parts.add("symbols=${payload.symbols.size}")
+    if (validEdges > 0) parts.add("edges=$validEdges")
+    if (payload.packRoot.isNotEmpty()) parts.add("pack_root=${payload.packRoot}")
+    parts.add("session=true")
+    b.append(parts.joinToString(" "))
+    b.append('\n')
+
+    // Was this symbol transmitted in a PRIOR response (before this call)?
+    val wasNewThisCall = entries.filter { it.isNew }.map { it.symbol.qualifiedName }.toSet()
 
     // Group by distance.
     val groups = groupByDistance(payload.symbols)
@@ -102,14 +113,14 @@ fun encodeWithSession(payload: Payload, session: Session?): String {
         b.append("## $name\n")
 
         for (s in g.symbols) {
-            val idx = localIndex[s.qualifiedName] ?: continue
-            if (session.transmitted(s.qualifiedName)) {
+            val id = idOf(s.qualifiedName)
+            if (s.qualifiedName !in wasNewThisCall) {
                 // Bare reference: symbol was sent in a prior response.
-                b.append("@$idx  # previously transmitted\n")
+                b.append("@$id  # previously transmitted\n")
             } else {
                 // Full declaration.
                 val kind = abbreviateKind(s.kind)
-                b.append("@$idx $kind ${s.qualifiedName} ${"%.2f".format(s.score)} ${s.provenance}\n")
+                b.append("@$id $kind ${s.qualifiedName} ${"%.2f".format(s.score)} ${s.provenance}\n")
             }
         }
     }
@@ -118,19 +129,14 @@ fun encodeWithSession(payload: Payload, session: Session?): String {
     if (payload.edges.isNotEmpty()) {
         b.append("## edges [$validEdges]\n")
         for (e in payload.edges) {
-            val srcIdx = localIndex[e.source] ?: continue
-            val tgtIdx = localIndex[e.target] ?: continue
-            b.append("@$tgtIdx<@$srcIdx ${e.edgeType}")
+            if (e.source !in symbolNames || e.target !in symbolNames) continue
+            b.append("@${idOf(e.target)}<@${idOf(e.source)} ${e.edgeType}")
             if (e.status.isNotEmpty() && e.status != "unchanged") {
                 b.append(" ${e.status}")
             }
             b.append('\n')
         }
     }
-
-    // Record all new symbols in the session.
-    val newSymbols = entries.filter { it.isNew }.map { it.symbol }
-    session.record(newSymbols)
 
     return b.toString()
 }
