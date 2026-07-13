@@ -2,6 +2,7 @@ package com.blackwellsystems.gcf
 
 import kotlinx.serialization.json.*
 import org.junit.jupiter.api.DynamicTest
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestFactory
 import java.io.File
 import kotlin.test.assertEquals
@@ -22,6 +23,18 @@ class ConformanceV2Test {
             .map { Fixture(it.relativeTo(fixtureDir).path, Json.parseToJsonElement(it.readText()).jsonObject) }
             .sortedBy { it.relPath }
             .toList()
+    }
+
+    // Floor assertion: a green run MUST have exercised the full shared suite. The
+    // factory below returns a single passing SKIP test when no fixtures are found, so a
+    // mispathed or partial checkout would otherwise pass having verified almost nothing.
+    // A wholly-absent sibling checkout is skipped (CI clones gcf in a separate step that
+    // fails loudly if it cannot).
+    @Test
+    fun discoversFullSharedFixtureSet() {
+        if (!fixtureDir.exists()) return
+        val n = loadFixtures().size
+        assertTrue(n >= 150, "discovered only $n conformance fixtures, expected at least 150; the shared gcf fixture set is incomplete or mispathed")
     }
 
     @TestFactory
