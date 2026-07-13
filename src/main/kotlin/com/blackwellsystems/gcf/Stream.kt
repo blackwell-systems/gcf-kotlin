@@ -124,7 +124,11 @@ class StreamEncoder(
         for ((name, c) in groupCounts) {
             if (c > 0) sections.add("$name:$c")
         }
-        if (edgeCount > 0) sections.add("edges:$edgeCount")
+        // The edge count is always the last counts entry, even when 0 (SPEC 8.4,
+        // 8.4.1): it keeps the positional form unambiguous and anchors the labeled
+        // form (minimal counts=edges:0). Zero-count distance groups are omitted, but
+        // edges is not.
+        sections.add("edges:$edgeCount")
 
         val countsStr = if (labeledTrailerCounts) {
             // Labeled form (SPEC §8.4.1): label:count per entry.
