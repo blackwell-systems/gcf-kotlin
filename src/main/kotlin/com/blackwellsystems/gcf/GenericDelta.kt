@@ -40,7 +40,7 @@ data class GenericDeltaPayload(
 )
 
 /** Sort strings by UTF-8 byte order (matching Go's sort.Strings / Rust str order). */
-private val byteOrder = Comparator<String> { a, b ->
+internal val byteOrder = Comparator<String> { a, b ->
     val ab = a.toByteArray(Charsets.UTF_8)
     val bb = b.toByteArray(Charsets.UTF_8)
     val n = minOf(ab.size, bb.size)
@@ -52,7 +52,7 @@ private val byteOrder = Comparator<String> { a, b ->
     ab.size - bb.size
 }
 
-private fun sha256Hex(s: String): String =
+internal fun sha256Hex(s: String): String =
     MessageDigest.getInstance("SHA-256")
         .digest(s.toByteArray(Charsets.UTF_8))
         .joinToString("") { "%02x".format(it) }

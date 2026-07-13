@@ -60,6 +60,7 @@ class ConformanceV2Test {
                     "encode" -> runEncode(relPath, data)
                     "decode" -> runDecode(relPath, data)
                     "error" -> runError(relPath, data)
+                    "pack-root" -> runPackRoot(relPath, data)
                     "generic-pack-root" -> runGenericPackRoot(relPath, data)
                     "generic-delta" -> runGenericDelta(relPath, data)
                     "generic-delta-verify" -> runGenericDeltaApply(relPath, data, decode = false)
@@ -69,6 +70,31 @@ class ConformanceV2Test {
                 }
             }
         }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun runPackRoot(relPath: String, data: JsonObject) {
+        val inp = jsonToAny(data["input"]!!) as Map<String, Any?>
+        val symbols = (inp["symbols"] as? List<Any?> ?: emptyList()).map { s ->
+            val m = s as Map<String, Any?>
+            Symbol(
+                qualifiedName = m["qualifiedName"] as? String ?: "",
+                kind = m["kind"] as? String ?: "",
+                score = (m["score"] as? Number)?.toDouble() ?: 0.0,
+                provenance = m["provenance"] as? String ?: "",
+                distance = (m["distance"] as? Number)?.toInt() ?: 0,
+            )
+        }
+        val edges = (inp["edges"] as? List<Any?> ?: emptyList()).map { e ->
+            val m = e as Map<String, Any?>
+            Edge(
+                source = m["source"] as? String ?: "",
+                target = m["target"] as? String ?: "",
+                edgeType = m["edgeType"] as? String ?: "",
+                status = m["status"] as? String ?: "",
+            )
+        }
+        assertEquals(data["expected"]!!.jsonPrimitive.content, packRoot(symbols, edges), "pack-root mismatch in $relPath")
     }
 
     private fun runGenericPackRoot(relPath: String, data: JsonObject) {
