@@ -43,13 +43,20 @@ fun encode(payload: Payload): String {
         }
     }
 
-    // Edges section.
+    // Edges section. Order edges by source ID then target ID (then edge type for
+    // parallel edges) so the wire is canonical regardless of the order edges were
+    // provided (SPEC 16.1). Edge reordering is decode-invariant (edges are a set)
+    // and does not affect pack_root, which sorts edge records independently.
     if (payload.edges.isNotEmpty()) {
+        val resolved = payload.edges.mapNotNull { e ->
+            val srcIdx = symIndex[e.source] ?: return@mapNotNull null
+            val tgtIdx = symIndex[e.target] ?: return@mapNotNull null
+            ResolvedEdge(srcIdx, tgtIdx, e.edgeType, e.status)
+        }.sortedWith(compareBy({ it.srcIdx }, { it.tgtIdx }, { it.edgeType }))
+
         b.append("## edges [$validEdges]\n")
-        for (e in payload.edges) {
-            val srcIdx = symIndex[e.source] ?: continue
-            val tgtIdx = symIndex[e.target] ?: continue
-            b.append("@$tgtIdx<@$srcIdx ${e.edgeType}")
+        for (e in resolved) {
+            b.append("@${e.tgtIdx}<@${e.srcIdx} ${e.edgeType}")
             if (e.status.isNotEmpty() && e.status != "unchanged") {
                 b.append(" ${e.status}")
             }
@@ -59,6 +66,13 @@ fun encode(payload: Payload): String {
 
     return b.toString()
 }
+
+internal data class ResolvedEdge(
+    val srcIdx: Int,
+    val tgtIdx: Int,
+    val edgeType: String,
+    val status: String,
+)
 
 internal data class DistanceGroup(val distance: Int, val symbols: List<Symbol>)
 
