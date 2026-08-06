@@ -131,18 +131,59 @@ class RoundtripV2Test {
         }
     }
 
+    // Hammers the flatten path with keys drawn from an alphabet that includes the
+    // empty string and every '>' arrangement (leading, trailing, bare, interior).
+    // These are exactly the keys the SPEC 7.4.6 empty-key fix guards against: an empty
+    // or '>'-containing key produces an empty or literal path segment that the decoder
+    // refuses to invert, so a pre-fix encoder emitted a column it could not round-trip
+    // (silent corruption). The scalar and genBareKey generators never produce these,
+    // so without this test the fix is unverified under fuzz. Post-fix these fields fall
+    // back to the attachment form and MUST round-trip.
+    @Test
+    fun `flatten roundtrip adversarial keys`() {
+        val rng = Random(0x5e)
+        var sawEmpty = false
+        var sawGt = false
+        for (i in 0 until iterations) {
+            val v = genFlattenableArrayWith(rng, ::genFlattenAdversarialKey)
+            if (!sawEmpty || !sawGt) {
+                for (row in v) {
+                    if (row is Map<*, *>) for (k in row.keys) {
+                        val ks = k.toString()
+                        if (ks.isEmpty()) sawEmpty = true
+                        if (">" in ks) sawGt = true
+                    }
+                }
+            }
+            for (noFlatten in listOf(false, true)) {
+                val gcf = encodeGeneric(v, GenericOptions(noFlatten = noFlatten))
+                val decoded = decodeGeneric(gcf)
+                assertTrue(structuralEqual(v, decoded),
+                    "iteration $i noFlatten=$noFlatten: mismatch\n  input: $v\n  decoded: $decoded\n  gcf: $gcf")
+            }
+        }
+        assertTrue(sawEmpty && sawGt,
+            "adversarial generator failed to exercise the target keys: sawEmpty=$sawEmpty sawGt=$sawGt")
+    }
+
     private sealed class FlatShape {
         object Scalar : FlatShape()
         class Nested(val sub: List<Pair<String, FlatShape>>) : FlatShape()
     }
 
-    private fun genFlatShape(rng: Random, depth: Int, maxDepth: Int): FlatShape {
+    private fun genFlatShape(rng: Random, depth: Int, maxDepth: Int): FlatShape =
+        genFlatShapeWith(rng, depth, maxDepth, ::genBareKey)
+
+    // genFlatShapeWith is the key-parametrized generator. keyFn chooses each nested
+    // key, so an adversarial alphabet (empty string, '>' arrangements) can be threaded
+    // through the whole flatten path.
+    private fun genFlatShapeWith(rng: Random, depth: Int, maxDepth: Int, keyFn: (Random) -> String): FlatShape {
         if (depth >= maxDepth || rng.nextFloat() < 0.45) return FlatShape.Scalar
         val sub = mutableListOf<Pair<String, FlatShape>>()
         val seen = mutableSetOf<String>()
         repeat(1 + rng.nextInt(3)) {
-            val k = genBareKey(rng)
-            if (seen.add(k)) sub.add(k to genFlatShape(rng, depth + 1, maxDepth))
+            val k = keyFn(rng)
+            if (seen.add(k)) sub.add(k to genFlatShapeWith(rng, depth + 1, maxDepth, keyFn))
         }
         return if (sub.isEmpty()) FlatShape.Scalar else FlatShape.Nested(sub)
     }
@@ -159,22 +200,44 @@ class RoundtripV2Test {
         }
     }
 
-    private fun genFlattenableArray(rng: Random): List<Any?> {
+    private fun genFlattenableArray(rng: Random): List<Any?> =
+        genFlattenableArrayWith(rng, ::genBareKey)
+
+    // adversarialFlattenKeys is the alphabet for the empty-key / '>' flatten fuzz. It
+    // deliberately includes the empty string and every leading/trailing/bare/interior
+    // '>' arrangement, so the flatten-eligibility guard (SPEC 7.4.6.1.3) is stressed on
+    // exactly the keys that would produce empty or literal path segments: the class
+    // that silently corrupted round-trips before the fix. Plain keys are mixed in so
+    // flatten still triggers (mixed eligible/ineligible fields).
+    private val adversarialFlattenKeys = listOf(
+        "", ">", ">>", "a>b", "a>", ">b", ">a>", "a>>b", "a", "b", "c", "id", "m", "n")
+
+    private fun genFlattenAdversarialKey(rng: Random): String =
+        adversarialFlattenKeys[rng.nextInt(adversarialFlattenKeys.size)]
+
+    // genFlattenableArrayWith is the key-parametrized array generator. keyFn chooses
+    // each top-level and nested key. Existing callers pass genBareKey so their
+    // behavior is unchanged; the adversarial test passes genFlattenAdversarialKey.
+    private fun genFlattenableArrayWith(rng: Random, keyFn: (Random) -> String): List<Any?> {
         val schema = mutableListOf<Pair<String, FlatShape>>("id" to FlatShape.Scalar)
         val seen = mutableSetOf("id")
         var hasNested = false
         repeat(1 + rng.nextInt(3)) {
-            val k = genBareKey(rng)
+            val k = keyFn(rng)
             if (seen.add(k)) {
-                val s = genFlatShape(rng, 1, 3)
+                val s = genFlatShapeWith(rng, 1, 3, keyFn)
                 if (s is FlatShape.Nested) hasNested = true
                 schema.add(k to s)
             }
         }
         if (!hasNested) {
-            val k = genBareKey(rng)
-            schema.add(k to FlatShape.Nested(listOf(
-                genBareKey(rng) to FlatShape.Nested(listOf(genBareKey(rng) to FlatShape.Scalar)))))
+            // Mirror the Go non-nested fallback dedup: only add the synthesized nested
+            // field if its key isn't already present (adversarial keys collide often).
+            val k = keyFn(rng)
+            if (seen.add(k)) {
+                schema.add(k to FlatShape.Nested(listOf(
+                    keyFn(rng) to FlatShape.Nested(listOf(keyFn(rng) to FlatShape.Scalar)))))
+            }
         }
         val rows = 2 + rng.nextInt(6)
         return (0 until rows).map {
