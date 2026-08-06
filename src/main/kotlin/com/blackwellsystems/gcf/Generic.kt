@@ -150,7 +150,7 @@ private data class FlatLeaf(val path: String, val keys: List<String>)
 @Suppress("UNCHECKED_CAST")
 private fun analyzeFlattenable(arr: List<*>, fieldName: String, parentPath: String): List<FlatLeaf>? {
     // Field names containing ">" cannot be flattened (would create ambiguous paths).
-    if (">" in fieldName) return null
+    if (fieldName.isEmpty() || ">" in fieldName) return null // empty/">" -> ambiguous path (SPEC 7.4.6.1.3)
     var canonicalShape: MutableMap<String, String>? = null // key -> "scalar" | "nested"
     var canonicalKeys: List<String>? = null
 
@@ -174,7 +174,7 @@ private fun analyzeFlattenable(arr: List<*>, fieldName: String, parentPath: Stri
         if (canonicalShape == null) {
             val shape = mutableMapOf<String, String>()
             for (k in keys) {
-                if (">" in k) return null
+                if (k.isEmpty() || ">" in k) return null // empty/">" -> ambiguous path (SPEC 7.4.6.1.3)
                 val value = obj[k]
                 when {
                     value is List<*> -> return null
