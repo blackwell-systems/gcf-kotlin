@@ -250,6 +250,12 @@ class ConformanceV2Test {
         // Round-trip.
         val decoded = decodeGeneric(got)
         assertTrue(structuralEqual(jsonToAny(data["input"]!!), decoded), "round-trip mismatch in $relPath")
+
+        // Re-encode idempotence: encodeGeneric(decodeGeneric(got)) must equal `got`
+        // byte-for-byte. structuralEqual ignores object key order, so it would pass a
+        // decoder that reconstructs fields out of declared position; this order-sensitive
+        // check catches that (SPEC key-order preservation, lines 52, 905, 931).
+        assertReencodeIdempotent(relPath, got)
     }
 
     private fun runRoundtrip(relPath: String, data: JsonObject) {
@@ -260,6 +266,16 @@ class ConformanceV2Test {
         }
         val decoded = decodeGeneric(got)
         assertTrue(structuralEqual(input, decoded), "round-trip mismatch in $relPath\n  got: $decoded\n  exp: $input")
+        assertReencodeIdempotent(relPath, got)
+    }
+
+    // Assert that decoding then re-encoding a generic wire string is a byte-exact
+    // fixed point. Graph wires are decoded through the graph path (a different value
+    // shape) and are excluded here; this covers the generic profile only.
+    private fun assertReencodeIdempotent(relPath: String, got: String) {
+        if (got.startsWith("GCF profile=graph")) return
+        val reencoded = encodeGeneric(decodeGeneric(got))
+        assertEquals(got, reencoded, "re-encode idempotence mismatch in $relPath (decode reconstructed fields out of declared order)")
     }
 
     @Suppress("UNCHECKED_CAST")

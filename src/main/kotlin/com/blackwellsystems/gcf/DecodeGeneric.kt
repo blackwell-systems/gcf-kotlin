@@ -573,8 +573,21 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
             }
         }
 
+        // Reconstruct the row in declared field-union order. A flattened group is
+        // emitted at the position of its first path column, so the nested object
+        // reappears where the original field was, not appended at the end (SPEC
+        // 7.4.6.1 and the key-order preservation requirement, SPEC lines 52, 905, 931).
+        val nested = if (pathColumnMap.isNotEmpty()) unflattenPathsKt(pathColumnMap, flatValues, flatAbsent) else linkedMapOf()
+        val emittedGroups = mutableSetOf<String>()
         val row = linkedMapOf<String, Any?>()
         for (f in fields) {
+            if (f in pathColumnMap) {
+                val top = pathColumnMap[f]!![0]
+                if (top in emittedGroups) continue
+                emittedGroups.add(top)
+                if (top in nested) row[top] = nested[top] // omitted when the whole group is absent
+                continue
+            }
             if (f in missingFields) continue
             if (f in cellValues) { row[f] = cellValues[f]; continue }
             if (f in attachmentValues) { row[f] = attachmentValues[f]; continue }
@@ -582,11 +595,6 @@ private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields
         // Also add any orphan attachment values (fields excluded from column list, e.g. ">" fields).
         for ((k, v) in attachmentValues) {
             if (k !in row) row[k] = v
-        }
-        // Unflatten path columns into nested objects.
-        if (pathColumnMap.isNotEmpty()) {
-            val nested = unflattenPathsKt(pathColumnMap, flatValues, flatAbsent)
-            row.putAll(nested)
         }
 
         rows.add(row)
