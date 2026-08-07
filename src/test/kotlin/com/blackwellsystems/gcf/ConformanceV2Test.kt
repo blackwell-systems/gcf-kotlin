@@ -118,7 +118,56 @@ class ConformanceV2Test {
 
     private fun runGenericDelta(relPath: String, data: JsonObject) {
         val d = toDelta(jsonToAny(data["input"]!!))
-        assertEquals(data["expected"]!!.jsonPrimitive.content, encodeGenericDelta(d), "delta encode mismatch in $relPath")
+        val got = encodeGenericDelta(d)
+        assertEquals(data["expected"]!!.jsonPrimitive.content, got, "delta encode mismatch in $relPath")
+        // Re-encode idempotence: encode(decode(got)) == got, ignoring the derived
+        // savings= header stat (computed from original set sizes at encode time and not
+        // carried in the wire). Confirms the delta decoder preserves fields and order.
+        assertEquals(
+            stripDeltaSavings(got),
+            stripDeltaSavings(encodeGenericDelta(decodeGenericDelta(got))),
+            "delta re-encode idempotence mismatch in $relPath",
+        )
+    }
+
+    // Remove the derived ` savings=...` header stat so re-encode idempotence can be
+    // checked on the parts of the wire the payload actually carries.
+    private fun stripDeltaSavings(s: String): String {
+        val idx = s.indexOf(" savings=")
+        if (idx < 0) return s
+        var end = idx + " savings=".length
+        while (end < s.length && s[end] != ' ' && s[end] != '\n') end++
+        return s.substring(0, idx) + s.substring(end)
+    }
+
+    private fun toPayload(input: JsonObject): Payload {
+        val syms = (input["symbols"]?.jsonArray ?: JsonArray(emptyList())).map { e ->
+            val o = e.jsonObject
+            Symbol(
+                qualifiedName = o["qualifiedName"]!!.jsonPrimitive.content,
+                kind = o["kind"]!!.jsonPrimitive.content,
+                score = o["score"]?.jsonPrimitive?.double ?: 0.0,
+                provenance = o["provenance"]?.jsonPrimitive?.content ?: "",
+                distance = o["distance"]?.jsonPrimitive?.int ?: 0,
+            )
+        }
+        val edges = (input["edges"]?.jsonArray ?: JsonArray(emptyList())).map { e ->
+            val o = e.jsonObject
+            Edge(
+                source = o["source"]!!.jsonPrimitive.content,
+                target = o["target"]!!.jsonPrimitive.content,
+                edgeType = o["edgeType"]!!.jsonPrimitive.content,
+                status = o["status"]?.jsonPrimitive?.content ?: "",
+            )
+        }
+        return Payload(
+            tool = input["tool"]?.jsonPrimitive?.content ?: "",
+            tokenBudget = input["tokenBudget"]?.jsonPrimitive?.int ?: 0,
+            tokensUsed = input["tokensUsed"]?.jsonPrimitive?.int ?: 0,
+            packRoot = input["packRoot"]?.jsonPrimitive?.content ?: "",
+            symbols = syms,
+            edges = edges,
+        )
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -241,7 +290,15 @@ class ConformanceV2Test {
 
     private fun runEncode(relPath: String, data: JsonObject) {
         val expected = data["expected"]?.jsonPrimitive?.content ?: return
-        if (expected.startsWith("GCF profile=graph")) return // skip graph encode
+        if (expected.startsWith("GCF profile=graph")) {
+            val p = toPayload(data["input"]!!.jsonObject)
+            val got = encode(p)
+            assertEquals(expected, got, "graph encode mismatch in $relPath")
+            // Re-encode idempotence: encode(decode(got)) == got. Confirms the graph
+            // decoder reconstructs the payload without dropping or reordering fields.
+            assertEquals(got, encode(decode(got)), "graph re-encode idempotence mismatch in $relPath")
+            return
+        }
 
         val input = jsonToAny(data["input"]!!)
         val got = encodeGeneric(input)
