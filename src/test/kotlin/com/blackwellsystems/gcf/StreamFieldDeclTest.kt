@@ -15,8 +15,8 @@ import kotlin.test.fail
  * A field name containing '>' is rejected (a flattened path is not representable in a
  * flat streaming row) and is asserted separately below.
  *
- * The streaming encoder does not emit the "GCF profile=generic" prelude, so the test
- * prepends it before decoding.
+ * The streaming encoder emits the "GCF profile=generic" prelude itself, so the test
+ * decodes its output as-is.
  */
 class StreamFieldDeclTest {
 
@@ -56,7 +56,7 @@ class StreamFieldDeclTest {
             enc.endArray()
             enc.close()
 
-            val wire = "GCF profile=generic\n" + out.toString()
+            val wire = out.toString()
             val decoded = decodeGeneric(wire)
             val want = linkedMapOf<String, Any?>("rows" to expectedRows)
             assertTrue(structuralEqual(want, decoded),

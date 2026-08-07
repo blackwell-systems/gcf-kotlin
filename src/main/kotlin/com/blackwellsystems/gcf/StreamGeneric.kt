@@ -22,6 +22,10 @@ class GenericStreamEncoder(private val writer: Writer) {
     private var current: ActiveArray? = null
     private var error: IllegalArgumentException? = null
 
+    init {
+        writer.write("GCF profile=generic\n")
+    }
+
     private data class ActiveArray(
         val name: String,
         val fields: List<String>,
