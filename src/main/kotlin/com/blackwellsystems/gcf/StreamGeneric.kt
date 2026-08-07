@@ -67,7 +67,7 @@ class GenericStreamEncoder(private val writer: Writer) {
     @Synchronized
     fun writeRow(values: List<Any?>) {
         val cur = current ?: return
-        val parts = values.map { formatValue(it) }
+        val parts = values.map { formatScalarValue(it, '|') }
         writer.write("${parts.joinToString("|")}\n")
         writer.flush()
         cur.count++
@@ -82,7 +82,7 @@ class GenericStreamEncoder(private val writer: Writer) {
     /** Emit a key=value line immediately. */
     @Synchronized
     fun writeKV(key: String, value: Any?) {
-        writer.write("$key=${formatValue(value)}\n")
+        writer.write("$key=${formatScalarValue(value)}\n")
         writer.flush()
     }
 
@@ -99,7 +99,7 @@ class GenericStreamEncoder(private val writer: Writer) {
     /** Emit a primitive array inline: name[N]: val1,val2,val3 */
     @Synchronized
     fun writeInlineArray(name: String, values: List<Any?>) {
-        val parts = values.map { formatValue(it) }
+        val parts = values.map { formatScalarValue(it, ',') }
         writer.write("$name[${values.size}]: ${parts.joinToString(",")}\n")
         writer.flush()
     }
@@ -125,39 +125,5 @@ class GenericStreamEncoder(private val writer: Writer) {
         val cur = current ?: return
         sections.add(cur.name to cur.count)
         current = null
-    }
-
-    companion object {
-        private fun formatValue(v: Any?): String {
-            if (v == null) return "-"
-            return when (v) {
-                is Boolean -> if (v) "true" else "false"
-                is Int -> v.toString()
-                is Long -> v.toString()
-                is Double -> {
-                    if (v == v.toLong().toDouble() && !v.isInfinite()) {
-                        v.toLong().toString()
-                    } else {
-                        v.toString()
-                    }
-                }
-                is Float -> {
-                    val d = v.toDouble()
-                    if (d == d.toLong().toDouble() && !d.isInfinite()) {
-                        d.toLong().toString()
-                    } else {
-                        v.toString()
-                    }
-                }
-                is String -> {
-                    if (v.isEmpty()) return "\"\""
-                    if (v.contains("|") || v.contains("\n")) {
-                        return "\"${v.replace("\"", "\\\"")}\""
-                    }
-                    v
-                }
-                else -> v.toString()
-            }
-        }
     }
 }
