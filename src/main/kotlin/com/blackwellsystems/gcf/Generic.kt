@@ -25,7 +25,11 @@ fun encodeGeneric(data: Any?, opts: GenericOptions = GenericOptions()): String {
 private fun encodeRootValue(v: Any?, out: StringBuilder, opts: GenericOptions) {
     when {
         v == null -> out.append("=-\n")
-        v is Map<*, *> -> encodeObject(v as Map<String, Any?>, out, 0, opts)
+        v is Map<*, *> -> {
+            val m = v as Map<String, Any?>
+            val km = keyedMapEligible(m)
+            if (km.ok) encodeKeyedMap(null, km, out, 0, opts) else encodeObject(m, out, 0, opts)
+        }
         v is List<*> -> encodeRootArray(v, out, opts)
         else -> { out.append("="); out.append(formatScalarValue(v)); out.append("\n") }
     }
@@ -38,8 +42,14 @@ private fun encodeObject(map: Map<String, Any?>, out: StringBuilder, depth: Int,
         val fk = formatKeyValue(key)
         when {
             value is Map<*, *> -> {
-                out.append("${prefix}## $fk\n")
-                encodeObject(value as Map<String, Any?>, out, depth + 1, opts)
+                val vm = value as Map<String, Any?>
+                val km = keyedMapEligible(vm)
+                if (km.ok) {
+                    encodeKeyedMap(key, km, out, depth, opts)
+                } else {
+                    out.append("${prefix}## $fk\n")
+                    encodeObject(vm, out, depth + 1, opts)
+                }
             }
             value is List<*> -> encodeNamedArray(fk, value, out, depth, opts)
             else -> out.append("$prefix$fk=${formatScalarValue(value)}\n")
@@ -251,8 +261,109 @@ private fun resolveKeyChainKt(item: Any?, keys: List<String>): Pair<Any?, Boolea
 
 private data class FlatCol(val header: String, val type: String, val field: String, val keys: List<String>)
 
+/**
+ * Result of keyed-map eligibility analysis (SPEC 7.2a.1): the ordered member
+ * keys, their value objects, the ordered value-field union, and the key-column
+ * label. ok is false when the object must use Section 7.2 section encoding.
+ */
+private data class KeyedMap(
+    val keys: List<String>,
+    val values: List<Map<String, Any?>>,
+    val valueFields: List<String>,
+    val keyLabel: String,
+    val ok: Boolean
+)
+
+private val NOT_KEYED = KeyedMap(emptyList(), emptyList(), emptyList(), "", false)
+
+/**
+ * keyedMapEligible reports whether an object is a keyed map of objects that
+ * should render as a keyed table `## [N:]{key,...}` (SPEC 7.2a.1). It returns
+ * the ordered member keys, the value objects, the value-field union, and the
+ * key-column label.
+ */
 @Suppress("UNCHECKED_CAST")
-private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<String>, out: StringBuilder, depth: Int, opts: GenericOptions = GenericOptions()) {
+private fun keyedMapEligible(m: Map<String, Any?>): KeyedMap {
+    if (m.isEmpty()) return NOT_KEYED
+
+    // A keyed map requires at least two members: the form factors the shared
+    // value fields into one header, which only pays off across multiple members.
+    // A single-member map yields a one-row table the same size as a section, so
+    // keying it would change canonical output for every nested single-member
+    // object with no benefit (SPEC 7.2a.1).
+    if (m.size < 2) return NOT_KEYED
+
+    val keys = m.keys.toList()
+    val values = ArrayList<Map<String, Any?>>(keys.size)
+    val valueFields = mutableListOf<String>()
+    val seen = mutableSetOf<String>()
+    for (k in keys) {
+        val v = m[k]
+        if (v !is Map<*, *>) return NOT_KEYED // non-object value
+        val vo = v as Map<String, Any?>
+        values.add(vo)
+        for (f in vo.keys) {
+            if (seen.add(f)) valueFields.add(f)
+        }
+    }
+    if (valueFields.isEmpty()) return NOT_KEYED // all-empty value objects
+
+    // A keyed header needs at least one value field that can be a tabular column.
+    // A field name containing ">" cannot be a column (SPEC 7.4.6.1.4); if every
+    // value field contains ">", the keyed form would have only the key column,
+    // which is invalid. Such a map uses Section 7.2 section encoding instead.
+    if (valueFields.none { ">" !in it }) return NOT_KEYED
+
+    // Key-column label: "key", made unique by prepending "_" on collision.
+    var keyLabel = "key"
+    while (keyLabel in valueFields) keyLabel = "_$keyLabel"
+
+    return KeyedMap(keys, values, valueFields, keyLabel, true)
+}
+
+/**
+ * encodeKeyedMap emits a keyed table for a map of objects. It augments each
+ * value object with the key column and routes through encodeTabular with the
+ * keyed bracket, so nested-value handling (flatten/inline/attachment/null/
+ * absent) is inherited unchanged. name is null for a root/anonymous map.
+ */
+private fun encodeKeyedMap(name: String?, km: KeyedMap, out: StringBuilder, depth: Int, opts: GenericOptions) {
+    encodeKeyedMapWithPrefix(keyedHeaderPrefix(name, depth), km, out, depth, opts)
+}
+
+/**
+ * keyedHeaderPrefix builds the header prefix. A null name is an anonymous root
+ * keyed map (`## `); a non-null name (which may itself be the empty string) is a
+ * named block whose name is formatted per Section 2.4, so an empty name becomes
+ * `## "" ` and round-trips as a distinct level rather than the anonymous root.
+ */
+private fun keyedHeaderPrefix(name: String?, depth: Int): String {
+    val prefix = indent(depth)
+    return if (name == null) "$prefix## " else "$prefix## ${formatKeyValue(name)} "
+}
+
+/**
+ * encodeKeyedMapWithPrefix emits `<headerPrefix>[N:]{...}` and the keyed rows by
+ * reusing encodeTabular. Each value object is augmented with the key column so
+ * cell 0 carries the member key. headerPrefix is the full prefix up to the count
+ * bracket.
+ */
+private fun encodeKeyedMapWithPrefix(headerPrefix: String, km: KeyedMap, out: StringBuilder, depth: Int, opts: GenericOptions) {
+    val fields = ArrayList<String>(km.valueFields.size + 1)
+    fields.add(km.keyLabel)
+    fields.addAll(km.valueFields)
+
+    val arr = ArrayList<Map<String, Any?>>(km.keys.size)
+    for (i in km.keys.indices) {
+        val aug = LinkedHashMap<String, Any?>(km.values[i])
+        aug[km.keyLabel] = km.keys[i]
+        arr.add(aug)
+    }
+    encodeTabular(headerPrefix, arr, fields, out, depth, opts, keyed = true)
+}
+
+@Suppress("UNCHECKED_CAST")
+private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<String>, out: StringBuilder, depth: Int, opts: GenericOptions = GenericOptions(), keyed: Boolean = false) {
     val prefix = indent(depth)
 
     // Phase 0: Analyze fields for flattening.
@@ -295,7 +406,8 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
     }
 
     val headerFields = columns.joinToString(",") { it.header }
-    out.append("$headerPrefix[${arr.size}]{$headerFields}\n")
+    val br = if (keyed) ":]" else "]"
+    out.append("$headerPrefix[${arr.size}$br{$headerFields}\n")
 
     for ((i, item) in arr.withIndex()) {
         val map = item as? Map<String, Any?> ?: continue
@@ -364,8 +476,14 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
                 out.append("$prefix$vals\n")
             } else when (att.value) {
                 is Map<*, *> -> {
-                    out.append("$prefix.${fk} {}\n")
-                    encodeObject(att.value as Map<String, Any?>, out, depth + 2, opts)
+                    val am = att.value as Map<String, Any?>
+                    val km = keyedMapEligible(am)
+                    if (km.ok) {
+                        encodeKeyedMapWithPrefix("$prefix.$fk ", km, out, depth + 2, opts)
+                    } else {
+                        out.append("$prefix.${fk} {}\n")
+                        encodeObject(am, out, depth + 2, opts)
+                    }
                 }
                 is List<*> -> {
                     val sas = sharedArrSchemas[att.name]
@@ -427,8 +545,14 @@ private fun encodeExpanded(headerPrefix: String, arr: List<*>, out: StringBuilde
     for ((i, item) in arr.withIndex()) {
         when {
             item is Map<*, *> -> {
-                out.append("${prefix}@$i {}\n")
-                encodeObject(item as Map<String, Any?>, out, depth + 1, opts)
+                val im = item as Map<String, Any?>
+                val km = keyedMapEligible(im)
+                if (km.ok) {
+                    encodeKeyedMapWithPrefix("${prefix}@$i ", km, out, depth + 1, opts)
+                } else {
+                    out.append("${prefix}@$i {}\n")
+                    encodeObject(im, out, depth + 1, opts)
+                }
             }
             item is List<*> -> encodeExpandedArrayItem(prefix, i, item, out, depth, opts)
             else -> out.append("${prefix}@$i =${formatScalarValue(item)}\n")

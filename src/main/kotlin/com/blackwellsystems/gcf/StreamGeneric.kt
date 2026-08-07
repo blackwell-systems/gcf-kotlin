@@ -56,6 +56,32 @@ class GenericStreamEncoder(private val writer: Writer) {
     }
 
     /**
+     * Start a keyed-map section with deferred count [?:] (SPEC 7.2a). keyLabel is
+     * the key column; valueFields are the value-object fields. Each writeRow value
+     * list is [keyValue, ...valueFields].
+     */
+    @Synchronized
+    fun beginKeyedMap(name: String, keyLabel: String, valueFields: List<String>) {
+        if (error != null) return
+        if (current != null) {
+            endArrayInternal()
+        }
+        // A streaming value field name containing ">" is a flattened path a stream
+        // cannot represent (SPEC 8.3, 7.4.6). Reject it as beginArray does.
+        for (f in valueFields) {
+            if (">" in f) {
+                error = IllegalArgumentException(
+                    "streaming field name \"$f\" contains '>' (a flattened path is not representable in a streaming row)")
+                return
+            }
+        }
+        val fields = listOf(keyLabel) + valueFields
+        writer.write("## ${formatKeyValue(name)} [?:]{${formatFieldDecl(fields)}}\n")
+        writer.flush()
+        current = ActiveArray(name, fields)
+    }
+
+    /**
      * Quote each field name per Section 2.4 (via formatKeyValue), matching the buffered
      * tabular header. The streaming header previously joined field names raw, so a name
      * containing a delimiter or quote produced an invalid or ambiguous header (SPEC 8.3).

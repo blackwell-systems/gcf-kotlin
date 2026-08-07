@@ -184,9 +184,22 @@ private fun parseArrayFromHeader(lines: List<String>, headerLine: Int, depth: In
     if (!bp.startsWith("[")) throw IllegalArgumentException("invalid_count: $bp")
     val close = bp.indexOf(']')
     if (close < 0) throw IllegalArgumentException("invalid_count: $bp")
-    val countStr = bp.substring(1, close)
+    var countStr = bp.substring(1, close)
     val after = bp.substring(close + 1)
+
+    // A `[{count}:]` bracket marks a keyed map (SPEC 7.2a): the decoder
+    // reconstructs a JSON object, not an array. `[{count}]` remains an array.
+    val keyed = countStr.endsWith(":")
+    if (keyed) {
+        countStr = countStr.dropLast(1)
+        if (!after.startsWith("{")) throw IllegalArgumentException("keyed_map: missing field declaration")
+    }
+
     val count = if (countStr == "?") -1 else parseCountVal(countStr)
+
+    // A keyed map has at least one member; an empty object is encoded per
+    // Section 7.7, never as [0:] (SPEC 7.2a.4).
+    if (keyed && count == 0) throw IllegalArgumentException("keyed_map: zero count [0:] is invalid (an empty object uses Section 7.7)")
 
     if (count == 0 && !after.startsWith("{") && !after.startsWith(":")) return emptyList<Any?>() to 1
 
@@ -204,14 +217,41 @@ private fun parseArrayFromHeader(lines: List<String>, headerLine: Int, depth: In
     if (after.startsWith("{")) {
         val braceEnd = findClosingBraceIdx(after) ?: throw IllegalArgumentException("invalid field declaration")
         val fields = splitFieldDeclValue(after.substring(0, braceEnd + 1))
+        // A keyed-map header MUST declare at least two fields: the key column
+        // plus at least one value field (SPEC 7.2a.2).
+        if (keyed && fields.size < 2) throw IllegalArgumentException("keyed_map: header must declare at least two fields")
         val (rows, consumed) = parseTabularBody(lines, headerLine + 1, depth, fields, count)
         if (count >= 0 && rows.size != count) throw IllegalArgumentException("count_mismatch: declared $count, got ${rows.size}")
+        if (keyed) return keyedRowsToMap(rows, fields) to consumed + 1
         return rows to consumed + 1
     }
 
     val (items, consumed) = parseExpandedBody(lines, headerLine + 1, depth)
     if (count >= 0 && items.size != count) throw IllegalArgumentException("count_mismatch: declared $count, got ${items.size}")
     return items to consumed + 1
+}
+
+/**
+ * keyedRowsToMap reconstructs the map from decoded keyed-table rows (SPEC 7.2a.4):
+ * the first declared field is the member key; the remaining fields form the value
+ * object. The key-column label is discarded. Duplicate member keys are rejected.
+ */
+@Suppress("UNCHECKED_CAST")
+private fun keyedRowsToMap(rows: List<Any>, fields: List<String>): Map<String, Any?> {
+    if (fields.size < 2) throw IllegalArgumentException("keyed_map: header must declare at least two fields")
+    val keyLabel = fields[0]
+    val out = linkedMapOf<String, Any?>()
+    for (r in rows) {
+        val row = r as? Map<String, Any?> ?: throw IllegalArgumentException("keyed_map: row is not an object")
+        if (keyLabel !in row) throw IllegalArgumentException("keyed_map: row missing key column \"$keyLabel\"")
+        val kv = row[keyLabel]
+        val ks = kv as? String ?: kv.toString()
+        if (ks in out) throw IllegalArgumentException("keyed_map: duplicate member key \"$ks\"")
+        val value = linkedMapOf<String, Any?>()
+        for ((k, v) in row) if (k != keyLabel) value[k] = v
+        out[ks] = value
+    }
+    return out
 }
 
 private fun parseAttachmentName(rest: String): Pair<String, String> {
