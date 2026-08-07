@@ -93,7 +93,7 @@ private fun parseObjectBody(lines: List<String>, start: Int, depth: Int, out: Li
 
         if (content.startsWith("## ")) {
             val hdr = content.drop(3)
-            val bi = hdr.indexOf(" [")
+            val bi = findHeaderBracketStart(hdr)
             if (bi >= 0) {
                 val name = parseKeyFromHeader(hdr.substring(0, bi))
                 checkDup(out, name)
@@ -150,6 +150,23 @@ private fun parseObjectBody(lines: List<String>, start: Int, depth: Int, out: Li
         throw IllegalArgumentException("invalid_line: unexpected content in object body: $content")
     }
     return i - start
+}
+
+// findHeaderBracketStart locates the " [" that opens the named-array count bracket
+// OUTSIDE any quoted name, so a quoted section/key name containing " [" (e.g.
+// `## "a [1] b"`) is not misread as a named-array header. Mirrors the quote-aware
+// scan used by findClosingBraceIdx (tracks quote state and backslash escapes).
+private fun findHeaderBracketStart(s: String): Int {
+    var inQuote = false
+    var i = 0
+    while (i < s.length) {
+        val c = s[i]
+        if (c == '\\' && inQuote) { i += 2; continue }
+        if (c == '"') { inQuote = !inQuote; i++; continue }
+        if (!inQuote && c == ' ' && i + 1 < s.length && s[i + 1] == '[') return i
+        i++
+    }
+    return -1
 }
 
 private fun findKVSplit(s: String): Int? {
