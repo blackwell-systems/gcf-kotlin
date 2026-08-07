@@ -65,7 +65,8 @@ fun formatScalarValue(v: Any?, delimiter: Char = '\u0000'): String {
 
 fun formatNumberValue(f: Double): String {
     if (f.isNaN() || f.isInfinite()) return "0"
-    if (f == 0.0) return if (1.0 / f < 0) "-0" else "0"
+    // Negative zero canonicalizes to 0 (SPEC 2.3.1): -0.0 equals 0.0 by value.
+    if (f == 0.0) return "0"
     val a = kotlin.math.abs(f)
     if (a >= 1e-6 && a < 1e21) {
         var s = f.toBigDecimal().stripTrailingZeros().toPlainString()
