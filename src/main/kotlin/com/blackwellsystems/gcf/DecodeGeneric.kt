@@ -45,7 +45,15 @@ fun decodeGeneric(input: String): Any? {
         return scalarToAny(parseScalarValue(first.drop(1)))
     }
     if (first.startsWith("## [")) {
-        val (arr, _) = parseArrayFromHeader(contentLines, 0, 0, first.drop(3))
+        val (arr, consumed) = parseArrayFromHeader(contentLines, 0, 0, first.drop(3))
+        // A root array or keyed map spans the whole document, so any structural line
+        // past the consumed rows is a surplus item, not sibling content. The row loop
+        // stops at the declared count, so the count assert only catches the deficit
+        // case; surplus is caught here (SPEC Section 13: a mismatch, fewer OR more
+        // items than declared, is an error).
+        if (consumed < contentLines.size) {
+            throw IllegalArgumentException("count_mismatch: declared count is fewer than the rows present")
+        }
         return arr
     }
 

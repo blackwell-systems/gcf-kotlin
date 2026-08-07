@@ -23,6 +23,8 @@ fun decode(input: String): Payload {
     val symByID = mutableMapOf<Int, Symbol>()
     var currentDistance = 0
     var inEdges = false
+    var declaredEdges = -1
+    var edgesDeclared = false
     val edges = mutableListOf<Edge>()
     val isDelta = "delta=true" in header
     val validDeltaSections = setOf("removed", "added", "edges_removed", "edges_added")
@@ -37,15 +39,30 @@ fun decode(input: String): Payload {
         // Group header.
         if (trimmed.startsWith("## ")) {
             var group = trimmed.substring(3)
-            // Strip bracket suffix: "edges [200]" -> "edges"
+            // Strip bracket suffix: "edges [200]" -> "edges", capturing the
+            // declared count so it can be enforced per Section 13.
+            var declaredCount = -1
             val bracketIdx = group.indexOf(" [")
             if (bracketIdx >= 0) {
+                val bracket = group.substring(bracketIdx + 2)
                 group = group.substring(0, bracketIdx)
+                val end = bracket.indexOf(']')
+                if (end >= 0) {
+                    val cntStr = bracket.substring(0, end)
+                    if (cntStr != "?") { // "[?]" is a streaming deferred count (Section 8)
+                        declaredCount = cntStr.toIntOrNull()
+                            ?: throw DecodeException("count_mismatch: invalid section count \"$cntStr\"")
+                    }
+                }
             }
             if (isDelta && group !in validDeltaSections) {
                 throw DecodeException("malformed_delta: invalid delta section \"$group\"")
             }
             inEdges = group == "edges"
+            if (inEdges && declaredCount >= 0) {
+                declaredEdges = declaredCount
+                edgesDeclared = true
+            }
             if (!inEdges) {
                 currentDistance = when (group) {
                     "targets" -> 0
@@ -74,6 +91,12 @@ fun decode(input: String): Payload {
             symbols.add(sym)
             symByID[id] = sym
         }
+    }
+
+    // Section 13: a declared [N] section count MUST match the actual item count.
+    // The graph edges section is the graph profile's only [N]-bearing section.
+    if (edgesDeclared && edges.size != declaredEdges) {
+        throw DecodeException("count_mismatch: declared $declaredEdges edges, got ${edges.size}")
     }
 
     return Payload(

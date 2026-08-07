@@ -364,14 +364,22 @@ fun decodeGenericFull(text: String): Pair<GenericSet, String> {
     var i = 1
     while (i < lines.size) {
         val line = lines[i]
-        if (!line.startsWith("## ")) { i++; continue }
+        if (!line.startsWith("## ")) {
+            // Only blank lines, comments, and the ##! summary trailer are valid
+            // outside a section; any other line is a surplus row past a declared
+            // section count (Section 13).
+            if (line == "" || line.startsWith("# ") || line.startsWith("##! ")) { i++; continue }
+            throw IllegalArgumentException("count_mismatch: unexpected content after declared section rows: \"$line\"")
+        }
         val sh = parseSectionHeader(line.substring(3))
         name = sh.name
         fields = sh.fields
         if (key.isEmpty()) key = sh.keyField
         i++
-        repeat(sh.count) {
-            if (i >= lines.size) throw IllegalArgumentException("delta_invalid: fewer rows than declared count")
+        for (j in 0 until sh.count) {
+            if (i >= lines.size || lines[i].startsWith("## ")) {
+                throw IllegalArgumentException("count_mismatch: declared ${sh.count} rows, got $j")
+            }
             rows.add(parseRow(lines[i], fields))
             i++
         }
@@ -399,7 +407,13 @@ fun decodeGenericDelta(text: String): GenericDeltaPayload {
     var i = 1
     while (i < lines.size) {
         val line = lines[i]
-        if (!line.startsWith("## ")) { i++; continue }
+        if (!line.startsWith("## ")) {
+            // Only blank lines, comments, and the ##! summary trailer are valid
+            // outside a section; any other line is a surplus row past a declared
+            // section count (Section 13).
+            if (line == "" || line.startsWith("# ") || line.startsWith("##! ")) { i++; continue }
+            throw IllegalArgumentException("count_mismatch: unexpected content after declared section rows: \"$line\"")
+        }
         val sh = parseSectionHeader(line.substring(3))
         if (key.isEmpty() && sh.keyField.isNotEmpty()) key = sh.keyField
         if (!fieldsSet && (sh.name == "added" || sh.name == "changed")) {
@@ -410,9 +424,9 @@ fun decodeGenericDelta(text: String): GenericDeltaPayload {
         when (sh.name) {
             "added", "changed" -> {
                 val rows = mutableListOf<Map<String, Any?>>()
-                repeat(sh.count) {
-                    if (i >= lines.size) {
-                        throw IllegalArgumentException("delta_invalid: fewer rows than declared count in ## ${sh.name}")
+                for (j in 0 until sh.count) {
+                    if (i >= lines.size || lines[i].startsWith("## ")) {
+                        throw IllegalArgumentException("count_mismatch: declared ${sh.count} rows in ## ${sh.name}, got $j")
                     }
                     rows.add(parseRow(lines[i], sh.fields))
                     i++
@@ -420,9 +434,9 @@ fun decodeGenericDelta(text: String): GenericDeltaPayload {
                 if (sh.name == "added") added = rows else changed = rows
             }
             "removed" -> {
-                repeat(sh.count) {
-                    if (i >= lines.size) {
-                        throw IllegalArgumentException("delta_invalid: fewer identities than declared count in ## removed")
+                for (j in 0 until sh.count) {
+                    if (i >= lines.size || lines[i].startsWith("## ")) {
+                        throw IllegalArgumentException("count_mismatch: declared ${sh.count} identities in ## removed, got $j")
                     }
                     removed.add(scalarToAny(parseScalarValue(lines[i], true)))
                     i++
