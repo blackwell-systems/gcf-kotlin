@@ -6,24 +6,33 @@ package com.blackwellsystems.gcf
 fun encode(payload: Payload): String {
     val b = StringBuilder()
 
-    // Build symbol index for edge references.
+    // Group symbols by distance (sorted by score descending within each group).
+    val groups = groupByDistance(payload.symbols)
+
+    // Build the symbol index AFTER sorting so @N IDs are sequential in output order.
     val symIndex = mutableMapOf<String, Int>()
-    payload.symbols.forEachIndexed { i, s ->
-        symIndex[s.qualifiedName] = i
+    var nextID = 0
+    for (g in groups) {
+        for (s in g.symbols) {
+            symIndex[s.qualifiedName] = nextID
+            nextID++
+        }
     }
 
     // Count valid edges (both endpoints in symbol index).
     val validEdges = payload.edges.count { symIndex.containsKey(it.source) && symIndex.containsKey(it.target) }
 
-    // Header line.
-    b.append("GCF profile=graph tool=${payload.tool} budget=${payload.tokenBudget} tokens=${payload.tokensUsed} symbols=${payload.symbols.size} edges=$validEdges")
+    // Header line. Omit budget/tokens/edges when zero (SPEC 16.1), matching the reference.
+    b.append("GCF profile=graph tool=${payload.tool}")
+    if (payload.tokenBudget > 0) b.append(" budget=${payload.tokenBudget}")
+    if (payload.tokensUsed > 0) b.append(" tokens=${payload.tokensUsed}")
+    b.append(" symbols=${payload.symbols.size}")
+    if (validEdges > 0) b.append(" edges=$validEdges")
     if (payload.packRoot.isNotEmpty()) {
         b.append(" pack_root=${payload.packRoot}")
     }
     b.append('\n')
 
-    // Group symbols by distance.
-    val groups = groupByDistance(payload.symbols)
     val groupNames = listOf("targets", "related", "extended")
 
     for (g in groups) {
@@ -79,11 +88,16 @@ internal data class DistanceGroup(val distance: Int, val symbols: List<Symbol>)
 internal fun groupByDistance(symbols: List<Symbol>): List<DistanceGroup> {
     if (symbols.isEmpty()) return emptyList()
 
+    // Sort by distance ascending, then score descending within each group (stable),
+    // matching the reference so IDs and group membership are canonical regardless of
+    // input order (SPEC 16.1).
+    val sorted = symbols.sortedWith(compareBy<Symbol> { it.distance }.thenByDescending { it.score })
+
     val groups = mutableListOf<DistanceGroup>()
     var currentDistance = -1
     var currentSymbols = mutableListOf<Symbol>()
 
-    for (s in symbols) {
+    for (s in sorted) {
         if (s.distance != currentDistance) {
             if (currentSymbols.isNotEmpty()) {
                 groups.add(DistanceGroup(currentDistance, currentSymbols))
