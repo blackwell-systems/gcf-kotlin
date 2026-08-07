@@ -8,6 +8,9 @@ private val INLINE_ARRAY_RE = Regex("""\[[^\]]*\]\s*:""")
 fun needsQuote(s: String): Boolean {
     if (s.isEmpty()) return true
     if (s in setOf("-", "~", "^", "true", "false")) return true
+    // A value shaped like an inline-schema attachment marker (^{...}) would decode
+    // as an attachment and lose the string, so it must be quoted (SPEC 2.4).
+    if (s.length >= 3 && s.startsWith("^{") && s.endsWith("}")) return true
     if (JSON_NUMBER_RE.matches(s)) return true
     if (NUMERIC_LIKE_RE.containsMatchIn(s)) return true
     if (s.first() == ' ' || s.last() == ' ') return true
