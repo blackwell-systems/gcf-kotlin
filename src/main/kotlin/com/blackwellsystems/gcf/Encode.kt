@@ -48,7 +48,7 @@ fun encode(payload: Payload): String {
         for (s in g.symbols) {
             val idx = symIndex[s.qualifiedName] ?: continue
             val kind = abbreviateKind(s.kind)
-            b.append("@$idx $kind ${s.qualifiedName} ${"%.2f".format(s.score)} ${s.provenance}\n")
+            b.append("@$idx $kind ${s.qualifiedName} ${formatScore(s.score)} ${s.provenance}\n")
         }
     }
 

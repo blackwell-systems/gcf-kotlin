@@ -88,6 +88,17 @@ fun formatNumberValue(f: Double): String {
 
 fun formatKeyValue(s: String): String = if (BARE_KEY_RE.matches(s)) s else quoteString(s)
 
+/**
+ * Format a graph score to exactly two decimals with round-half-to-even applied to
+ * the exact IEEE-754 double (SPEC 5), matching the C/Go printf family, Python,
+ * Rust, and .NET. This deliberately does NOT use `"%.2f".format(...)`, which goes
+ * through java.util.Formatter (round-half-up) and diverges at exact binary
+ * midpoints (0.125 -> 0.12 not 0.13, 0.625 -> 0.62 not 0.63), producing a
+ * non-interoperable wire.
+ */
+fun formatScore(score: Double): String =
+    java.math.BigDecimal(score).setScale(2, java.math.RoundingMode.HALF_EVEN).toPlainString()
+
 // --- Parsing ---
 
 sealed class ScalarParsed {

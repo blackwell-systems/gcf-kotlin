@@ -120,7 +120,7 @@ fun encodeWithSession(payload: Payload, session: Session?): String {
             } else {
                 // Full declaration.
                 val kind = abbreviateKind(s.kind)
-                b.append("@$id $kind ${s.qualifiedName} ${"%.2f".format(s.score)} ${s.provenance}\n")
+                b.append("@$id $kind ${s.qualifiedName} ${formatScore(s.score)} ${s.provenance}\n")
             }
         }
     }

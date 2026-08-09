@@ -60,7 +60,7 @@ class StreamEncoder(
         nextID++
 
         val kind = abbreviateKind(s.kind)
-        writer.write("@$id $kind ${s.qualifiedName} ${"%.2f".format(s.score)} ${s.provenance}\n")
+        writer.write("@$id $kind ${s.qualifiedName} ${formatScore(s.score)} ${s.provenance}\n")
         writer.flush()
 
         val idx = groupCounts.indexOfFirst { it.first == groupName }

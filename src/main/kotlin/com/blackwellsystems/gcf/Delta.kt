@@ -28,7 +28,7 @@ fun encodeDelta(delta: DeltaPayload): String {
         b.append("## added\n")
         delta.added.forEachIndexed { i, s ->
             val kind = abbreviateKind(s.kind)
-            b.append("@$i $kind ${s.qualifiedName} ${"%.2f".format(s.score)} ${s.provenance} ${s.distance}\n")
+            b.append("@$i $kind ${s.qualifiedName} ${formatScore(s.score)} ${s.provenance} ${s.distance}\n")
         }
     }
 
