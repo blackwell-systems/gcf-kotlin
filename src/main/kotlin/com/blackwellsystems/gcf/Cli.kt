@@ -90,10 +90,7 @@ private fun jsonElementToNative(element: JsonElement): Any? = when (element) {
         if (element.isString) {
             element.content
         } else {
-            element.booleanOrNull
-                ?: element.longOrNull
-                ?: element.doubleOrNull
-                ?: element.content
+            element.booleanOrNull ?: numberFromJson(element.content)
         }
     }
     is JsonArray -> element.map { jsonElementToNative(it) }
@@ -104,6 +101,25 @@ private fun jsonElementToNative(element: JsonElement): Any? = when (element) {
         }
         map
     }
+}
+
+/**
+ * Convert a JSON number token (its raw literal text) to a native value. Token
+ * shape follows domain (SPEC 2.3.2): a bare-integer literal (no fraction, no
+ * exponent) is an int64-domain integer and becomes an exact Long, or an
+ * out-of-range error beyond int64; it MUST NOT be routed through Double, which
+ * would silently approximate magnitudes beyond 2^53. A decimal or exponent
+ * literal is a Double.
+ */
+private fun numberFromJson(content: String): Any {
+    if ('.' !in content && 'e' !in content && 'E' !in content) {
+        val n = content.toLongOrNull()
+        if (n != null) return n
+        // An all-digits integer literal that Long cannot hold is out of range.
+        // A non-numeric token would not have parsed as a JSON number.
+        throw IllegalArgumentException(outOfRangeMessage(content))
+    }
+    return content.toDouble()
 }
 
 private fun nativeToJsonElement(value: Any?): JsonElement = when (value) {

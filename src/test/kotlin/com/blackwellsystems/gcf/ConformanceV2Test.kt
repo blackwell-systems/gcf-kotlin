@@ -59,7 +59,9 @@ class ConformanceV2Test {
                     "encode" -> runEncode(relPath, data)
                     "decode" -> runDecode(relPath, data)
                     "roundtrip" -> runRoundtrip(relPath, data)
+                    "roundtrip-wire" -> runRoundtripWire(relPath, data)
                     "error" -> runError(relPath, data)
+                    "encode-error" -> runEncodeError(relPath, data)
                     "pack-root" -> runPackRoot(relPath, data)
                     "generic-pack-root" -> runGenericPackRoot(relPath, data)
                     "generic-delta" -> runGenericDelta(relPath, data)
@@ -471,6 +473,34 @@ class ConformanceV2Test {
         assertTrue(subsetMatch(expected, got), "decode mismatch in $relPath\n  got: $got\n  exp: $expected")
     }
 
+    // roundtrip-wire: `input` and `expected` are both wire strings. Decode the input
+    // wire, re-encode, and require the result to equal `expected` byte-for-byte. The
+    // value never becomes a host JSON number, so values a JSON parser would float
+    // (integers beyond 2^53) are pinned here (SPEC 2.3.2).
+    private fun runRoundtripWire(relPath: String, data: JsonObject) {
+        val inputWire = data["input"]!!.jsonPrimitive.content
+        val expectedWire = data["expected"]!!.jsonPrimitive.content
+        val decoded = decodeGeneric(inputWire)
+        assertEquals(expectedWire, encodeGeneric(decoded), "wire idempotence mismatch in $relPath")
+    }
+
+    // encode-error: `input` is a JSON value (encode-side, not a wire string) that is
+    // out of the numeric domain. Ingesting it the same way the "encode" operation
+    // does (jsonToAny) then encoding MUST throw; the value never becomes an
+    // approximate host number (SPEC 2.3.2).
+    private fun runEncodeError(relPath: String, data: JsonObject) {
+        val expectedError = data["expectedError"]?.jsonPrimitive?.content
+        try {
+            encodeGeneric(jsonToAny(data["input"]!!))
+            fail("expected error '${expectedError ?: "<any>"}' but got success in $relPath")
+        } catch (e: Exception) {
+            if (expectedError != null) {
+                assertTrue(expectedError in e.message.orEmpty(),
+                    "wrong error in $relPath: got '${e.message}', expected '$expectedError'")
+            }
+        }
+    }
+
     private fun runError(relPath: String, data: JsonObject) {
         val inputStr = data["input"]?.jsonPrimitive?.content ?: return
         val expectedError = data["expectedError"]?.jsonPrimitive?.content ?: return
@@ -488,15 +518,25 @@ class ConformanceV2Test {
         is JsonPrimitive -> when {
             element.isString -> element.content
             element.booleanOrNull != null -> element.boolean
-            element.intOrNull != null -> element.int
-            element.longOrNull != null -> element.long
-            element.doubleOrNull != null -> element.double
-            else -> element.content
+            // Token shape follows domain (SPEC 2.3.2): a bare-integer literal (no
+            // '.'/'e'/'E') is an int64-domain integer parsed to an exact Long, or an
+            // out-of-range error beyond int64; a decimal/exponent literal is a Double.
+            // Routing a >2^53 integer literal through Double would float it silently.
+            else -> numberFromJsonLiteral(element.content)
         }
         is JsonArray -> element.map { jsonToAny(it) }
         is JsonObject -> linkedMapOf<String, Any?>().also { map ->
             for ((k, v) in element) map[k] = jsonToAny(v)
         }
+    }
+
+    private fun numberFromJsonLiteral(content: String): Any {
+        if ('.' !in content && 'e' !in content && 'E' !in content) {
+            val n = content.toLongOrNull()
+            if (n != null) return n
+            throw IllegalArgumentException(outOfRangeMessage(content))
+        }
+        return content.toDouble()
     }
 
     private fun structuralEqual(a: Any?, b: Any?): Boolean {

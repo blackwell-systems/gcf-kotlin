@@ -1,5 +1,14 @@
 package com.blackwellsystems.gcf
 
+/**
+ * Build the canonical out-of-range error message (SPEC 2.3.2). The message
+ * contains the substring `out_of_range`, names the offending value, states the
+ * int64 interval, and gives the remediation (model larger values as strings).
+ */
+internal fun outOfRangeMessage(value: String): String =
+    "out_of_range: integer $value is outside the canonical int64 domain " +
+        "[-9223372036854775808, 9223372036854775807]; model larger values as strings (SPEC 2.3.2)"
+
 private val JSON_NUMBER_RE = Regex("^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$")
 private val NUMERIC_LIKE_RE = Regex("^[+-]\\.?\\d|^\\.\\d|^0\\d")
 private val BARE_KEY_RE = Regex("^[a-zA-Z_][a-zA-Z0-9_]*$")
@@ -48,10 +57,28 @@ fun formatScalarValue(v: Any?, delimiter: Char = '\u0000'): String {
     if (v == null) return "-"
     return when (v) {
         is Boolean -> if (v) "true" else "false"
+        // Signed integers fit the int64 domain exactly and render as plain decimal
+        // digits across the whole closed interval, including Long.MIN_VALUE
+        // (-2^63); an integer is never rendered in exponent form and its rendering
+        // is not gated on a magnitude test (SPEC 2.3.1, 2.3.2).
+        is Byte -> v.toString()
+        is Short -> v.toString()
         is Int -> v.toString()
         is Long -> v.toString()
         is Double -> formatNumberValue(v)
         is Float -> formatNumberValue(v.toDouble())
+        // A native integer that cannot be represented in int64 (a BigInteger or an
+        // unsigned 64-bit value above Long.MAX_VALUE) is outside the numeric domain
+        // and MUST be rejected rather than rendered lossily (SPEC 2.3.2). A value
+        // that fits int64 is encoded as its exact digits.
+        is java.math.BigInteger -> {
+            if (v.bitLength() >= 64) throw IllegalArgumentException(outOfRangeMessage(v.toString()))
+            v.toString()
+        }
+        is ULong -> {
+            if (v > Long.MAX_VALUE.toULong()) throw IllegalArgumentException(outOfRangeMessage(v.toString()))
+            v.toString()
+        }
         is Number -> v.toString()
         is String -> {
             if (needsQuote(v) || (delimiter != '\u0000' && delimiter in v)) quoteString(v) else v
@@ -68,7 +95,13 @@ fun formatNumberValue(f: Double): String {
     // Negative zero canonicalizes to 0 (SPEC 2.3.1): -0.0 equals 0.0 by value.
     if (f == 0.0) return "0"
     val a = kotlin.math.abs(f)
-    if (a >= 1e-6 && a < 1e21) {
+    // Plain decimal only below 2^53. Every double at or above 2^53 is integer-valued,
+    // so a plain rendering would emit a bare-integer token: indistinguishable from an
+    // int64 on the wire and beyond the binary64 safe-integer range (2^53-1), so a
+    // JavaScript decoder rejects it under its default policy. Exponent shape keeps bare
+    // tokens int64 and decimal/exponent tokens doubles (SPEC 2.3.1). 9007199254740992.0
+    // is 2^53.
+    if (a >= 1e-6 && a < 9007199254740992.0) {
         var s = f.toBigDecimal().stripTrailingZeros().toPlainString()
         // Strip trailing .0 for integer-valued floats
         if (s.endsWith(".0") && f == truncateToZero(f)) {
@@ -128,13 +161,22 @@ fun parseScalarValue(s: String, tabularContext: Boolean = false): ScalarParsed {
     if (s == "true") return ScalarParsed.BoolVal(true)
     if (s == "false") return ScalarParsed.BoolVal(false)
     if (JSON_NUMBER_RE.matches(s)) {
-        val d = s.toDoubleOrNull()
-        if (d != null) {
-            if ('.' !in s && 'e' !in s && 'E' !in s && kotlin.math.abs(d) <= (1L shl 53).toDouble()) {
-                return ScalarParsed.IntVal(d.toLong())
-            }
-            return ScalarParsed.DoubleVal(d)
+        // A bare token (no fraction, no exponent) is an integer parsed directly to
+        // Long so the full signed 64-bit domain round-trips exactly. Routing it
+        // through a Double would silently approximate any magnitude beyond 2^53
+        // (SPEC 2.3.2). `-0` is integer syntax and decodes to the value zero (Long
+        // 0), not a Double -0.0. Fraction/exponent forms remain IEEE-754 doubles.
+        if ('.' !in s && 'e' !in s && 'E' !in s) {
+            val n = s.toLongOrNull()
+            if (n != null) return ScalarParsed.IntVal(n)
+            // An all-digits token (JSON_NUMBER_RE matched, no '.'/'e'/'E') that
+            // toLongOrNull rejects is an integer literal overflowing int64: that is
+            // an out-of-range value, not a bare string. A genuinely non-numeric
+            // token cannot reach here because JSON_NUMBER_RE already matched.
+            throw IllegalArgumentException(outOfRangeMessage(s))
         }
+        val d = s.toDoubleOrNull()
+        if (d != null) return ScalarParsed.DoubleVal(d)
     }
     return ScalarParsed.StringVal(s)
 }
