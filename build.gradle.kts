@@ -14,7 +14,7 @@ tasks.named<JavaExec>("run") {
 }
 
 group = "com.blackwellsystems"
-version = "2.5.2"
+version = "2.6.0"
 
 repositories {
     mavenCentral()
