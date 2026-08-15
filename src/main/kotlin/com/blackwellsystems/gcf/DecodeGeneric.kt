@@ -130,7 +130,7 @@ private fun parseObjectBody(lines: List<String>, start: Int, depth: Int, out: Li
 
         // Inline array (e.g. items[3]: a,b,c). Only reached if no = found.
         if (!content.startsWith("@") && !content.startsWith("##")) {
-            val bracketIdx = content.indexOf('[')
+            val bracketIdx = arrayBracketStart(content)
             if (bracketIdx > 0) {
                 val rest = content.substring(bracketIdx)
                 val closeIdx = rest.indexOf(']')
@@ -164,6 +164,27 @@ private fun parseObjectBody(lines: List<String>, start: Int, depth: Int, out: Li
 // OUTSIDE any quoted name, so a quoted section/key name containing " [" (e.g.
 // `## "a [1] b"`) is not misread as a named-array header. Mirrors the quote-aware
 // scan used by findClosingBraceIdx (tracks quote state and backslash escapes).
+// Index of the '[' that opens a named-array marker (name[N]:), scanning past a
+// quoted key so a '[' inside the key name is not mistaken for the array bracket
+// (SPEC 4.2). Bare keys cannot contain '['.
+private fun arrayBracketStart(content: String): Int {
+    if (content.isNotEmpty() && content[0] == '"') {
+        var escaped = false
+        var i = 1
+        while (i < content.length) {
+            val c = content[i]
+            when {
+                escaped -> escaped = false
+                c == '\\' -> escaped = true
+                c == '"' -> return if (i + 1 < content.length && content[i + 1] == '[') i + 1 else -1
+            }
+            i++
+        }
+        return -1
+    }
+    return content.indexOf('[')
+}
+
 private fun findHeaderBracketStart(s: String): Int {
     var inQuote = false
     var i = 0
