@@ -64,7 +64,7 @@ private fun encodeRootArray(arr: List<*>, out: StringBuilder, opts: GenericOptio
         out.append("## [${arr.size}]: $vals\n"); return
     }
     val fields = tabularFields(arr)
-    if (fields != null) { encodeTabular("## ", arr, fields, out, 0, opts); return }
+    if (fields != null) { encodeTabular("## ", arr, fields, out, 0, opts, factorConst = true); return }
     encodeExpanded("## ", arr, out, 0, opts)
 }
 
@@ -76,7 +76,7 @@ private fun encodeNamedArray(name: String, arr: List<*>, out: StringBuilder, dep
         out.append("$prefix${name}[${arr.size}]: $vals\n"); return
     }
     val fields = tabularFields(arr)
-    if (fields != null) { encodeTabular("${prefix}## $name ", arr, fields, out, depth, opts); return }
+    if (fields != null) { encodeTabular("${prefix}## $name ", arr, fields, out, depth, opts, factorConst = true); return }
     encodeExpanded("${prefix}## $name ", arr, out, depth, opts)
 }
 
@@ -363,7 +363,7 @@ private fun encodeKeyedMapWithPrefix(headerPrefix: String, km: KeyedMap, out: St
 }
 
 @Suppress("UNCHECKED_CAST")
-private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<String>, out: StringBuilder, depth: Int, opts: GenericOptions = GenericOptions(), keyed: Boolean = false) {
+private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<String>, out: StringBuilder, depth: Int, opts: GenericOptions = GenericOptions(), keyed: Boolean = false, factorConst: Boolean = false) {
     val prefix = indent(depth)
 
     // Phase 0: Analyze fields for flattening.
@@ -405,7 +405,37 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
         sharedArraySchema(arr, f)?.let { sharedArrSchemas[f] = it }
     }
 
-    val headerFields = columns.joinToString(",") { it.header }
+    // Constant-column factoring (SPEC 7.4.7): a plain scalar column identical across
+    // every record is declared once in the header as name=value and omitted from the
+    // rows. Mandatory canonical for tabular arrays, gated off for keyed maps and the
+    // nested-attachment path (factorConst). At least one per-record column remains.
+    val constCol = BooleanArray(columns.size)
+    val constHeaderVal = arrayOfNulls<String>(columns.size)
+    if (factorConst && !keyed && arr.size >= 2) {
+        for (j in columns.indices) {
+            val col = columns[j]
+            if (col.type != "original") continue // only plain scalar columns qualify, never flattened/attachment
+            var first: String? = null
+            var isConst = true
+            for (item in arr) {
+                val m = item as? Map<String, Any?>
+                if (m == null || col.field !in m) { isConst = false; break }
+                val v = m[col.field]
+                if (v is Map<*, *> || v is List<*>) { isConst = false; break }
+                val cv = formatConstValue(v)
+                if (first == null) first = cv
+                else if (cv != first) { isConst = false; break }
+            }
+            if (isConst) { constCol[j] = true; constHeaderVal[j] = first }
+        }
+        // At least one per-record column MUST remain. If every column is constant
+        // (an array of identical objects), leave the last union field unfactored.
+        if (constCol.none { !it }) constCol[columns.size - 1] = false
+    }
+
+    val headerFields = columns.indices.joinToString(",") { j ->
+        if (constCol[j]) "${columns[j].header}=${constHeaderVal[j]}" else columns[j].header
+    }
     val br = if (keyed) ":]" else "]"
     out.append("$headerPrefix[${arr.size}$br{$headerFields}\n")
 
@@ -462,7 +492,9 @@ private fun encodeTabular(headerPrefix: String, arr: List<*>, fields: List<Strin
             attachments.add(Att(f, map[f], false, null))
         }
 
-        val row = cells.joinToString("|")
+        // Omit constant columns from the per-row cells (SPEC 7.4.7.3).
+        val rowCells = cells.filterIndexed { j, _ -> !constCol[j] }
+        val row = rowCells.joinToString("|")
         if (rowHasAttachment) out.append("${prefix}@$i $row\n") else out.append("$prefix$row\n")
 
         for (att in attachments) {

@@ -262,7 +262,37 @@ private fun parseArrayFromHeader(lines: List<String>, headerLine: Int, depth: In
 
     if (after.startsWith("{")) {
         val braceEnd = findClosingBraceIdx(after) ?: throw IllegalArgumentException("invalid field declaration")
-        val fields = splitFieldDeclValue(after.substring(0, braceEnd + 1))
+        val declStr = after.substring(0, braceEnd + 1)
+        val groupClause = after.substring(braceEnd + 1).trim()
+
+        // Value-grouping (SPEC 7.4.8): non-keyed tabular array with a group= clause.
+        if (!keyed && groupClause.startsWith("group=")) {
+            val entries = parseFieldEntries(declStr)
+            return decodeGroupedArray(lines, headerLine, depth, entries, groupClause, count)
+        }
+        if (groupClause.isNotEmpty()) {
+            throw IllegalArgumentException("malformed_header_field: unexpected content after field declaration: $groupClause")
+        }
+
+        // Constant-column factoring (SPEC 7.4.7): a non-keyed tabular array whose field
+        // declaration carries name=value entries (or a stray @, which is valid only with
+        // a group= clause). The common case (no "=" or "@") takes the plain path.
+        if (!keyed && declStr.any { it == '=' || it == '@' }) {
+            val entries = parseFieldEntries(declStr)
+            var hasConst = false
+            for (e in entries) {
+                if (e.isKey) {
+                    throw IllegalArgumentException("invalid field name: @${e.name} (an @ key column is valid only in a grouped section)")
+                }
+                if (e.isConst) hasConst = true
+            }
+            if (hasConst) {
+                return decodeConstantArray(lines, headerLine, depth, entries, count)
+            }
+            // No constants after all (e.g. a quoted name containing "="): plain path.
+        }
+
+        val fields = splitFieldDeclValue(declStr)
         // A keyed-map header MUST declare at least two fields: the key column
         // plus at least one value field (SPEC 7.2a.2).
         if (keyed && fields.size < 2) throw IllegalArgumentException("keyed_map: header must declare at least two fields")
@@ -388,7 +418,7 @@ private fun parseAttachment(lines: List<String>, lineIdx: Int, rest: String, dep
 }
 
 @Suppress("UNCHECKED_CAST")
-private fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields: List<String>, expectedCount: Int): Pair<List<Any>, Int> {
+internal fun parseTabularBody(lines: List<String>, start: Int, depth: Int, fields: List<String>, expectedCount: Int): Pair<List<Any>, Int> {
     val ind = "  ".repeat(depth)
     val rows = mutableListOf<Any>()
     var i = start
@@ -755,7 +785,7 @@ private fun parseExpandedBody(lines: List<String>, start: Int, depth: Int): Pair
     return items to (i - start)
 }
 
-private fun parseCountVal(s: String): Int {
+internal fun parseCountVal(s: String): Int {
     if (s == "0") return 0
     if (s.isEmpty() || s[0] == '0') throw IllegalArgumentException("invalid_count: $s")
     val n = s.toIntOrNull() ?: throw IllegalArgumentException("invalid_count: $s")
